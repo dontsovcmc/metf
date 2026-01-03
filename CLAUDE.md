@@ -113,13 +113,19 @@ Helper functions for I2C data formatting:
 - `intToHexChar()` - Convert integer to hex character
 - `hexText2AsciiArray()` - Convert hex string to byte array for I2C transmission
 
-#### 5. **RGB LED Control (ESP32 only)**
+#### 5. **RGB LED Control (ESP32 only, optional)**
 
-WS2812B addressable LED strip support via FastLED library:
+WS2812B addressable LED strip support via FastLED library.
 
+**Enabling RGB support:**
+- RGB support is optional and only compiled when `RGB_DEFAULT_PIN` is defined in build flags
+- To enable: Add `-DRGB_DEFAULT_PIN=<pin>` to your build flags (e.g., `-DRGB_DEFAULT_PIN=8`)
+- To disable: Simply omit the `RGB_DEFAULT_PIN` build flag - this saves memory and code space
+
+**Configuration:**
 - `/rgb` endpoint with actions: begin, brightness, color
-- Supports 1-10 LEDs
-- Default pin: GPIO 8 (configurable via `RGB_DEFAULT_PIN` define in `main.cpp`)
+- Number of LEDs configured at compile-time via `RGB_NUMBER` build flag (default: 1)
+- GPIO pin configured at compile-time via `RGB_DEFAULT_PIN` build flag (required to enable RGB)
 - Thread-safe LED updates using critical sections (same pattern as AsyncSerialBuffer)
 - Static memory allocation for predictable performance
 
@@ -136,8 +142,16 @@ WS2812B addressable LED strip support via FastLED library:
 
 **Initialization:**
 - Must call `action=begin` before brightness or color actions
-- Can reinitialize with different pin/count
-- Previous LED state cleared on reinitialization
+- Pin and LED count are compile-time constants - change build flags and recompile to modify
+- LED array is statically pre-allocated at compile-time
+- Previous LED state cleared on reinitialization (begin action)
+
+**Static Initialization:**
+- FastLED is initialized using static memory allocation via `FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>(rgb_leds, RGB_NUMBER)`
+- Pin number and LED count are template/macro parameters that must be known at compile-time
+- Configure via build flags in platformio.ini:
+  - `-DRGB_DEFAULT_PIN=<pin>` - GPIO pin for WS2812B data line
+  - `-DRGB_NUMBER=<count>` - Number of LEDs in the strip
 
 ### HTTP Request/Response Patterns
 
@@ -156,6 +170,8 @@ Standard build flags defined in `platformio.ini`:
 - `-DLOG_LEVEL_DEBUG` - Enable debug logging
 - `-DSSID_NAME` / `-DSSID_PASS` - WiFi credentials from `secrets.ini`
 - `-D ESP32_C6_env` - ESP32-C6 specific flag
+- `-DRGB_DEFAULT_PIN=<pin>` - GPIO pin for RGB LED data line (ESP32 only, optional - required to enable RGB support)
+- `-DRGB_NUMBER=<count>` - Number of WS2812B LEDs in the strip (ESP32 only, optional, default: 1)
 
 ### Serial Port Handling
 

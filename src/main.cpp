@@ -23,17 +23,18 @@ AsyncSerialBuffer asb;
 
 // RGB LED Support
 #ifdef ESP32
+#ifdef RGB_DEFAULT_PIN
 #include <FastLED.h>
 
-#define RGB_MAX_LEDS 10  // Maximum supported LEDs (configurable)
-#define RGB_DEFAULT_PIN 8  // Default GPIO pin for RGB LED (configurable)
+#ifndef RGB_NUMBER
+#define RGB_NUMBER 1 // Maximum supported LEDs (configurable)
+#endif
 
-static CRGB rgb_leds[RGB_MAX_LEDS];  // Pre-allocated LED array
-static uint8_t rgb_num_leds = 0;     // Actual number of LEDs initialized
-static uint8_t rgb_pin = 0;          // GPIO pin for LED data line
+static CRGB rgb_leds[RGB_NUMBER];  // Pre-allocated LED array
 static bool rgb_initialized = false; // Initialization state flag
 static uint8_t rgb_brightness = 255; // Current brightness (0-255)
-#endif 
+#endif // RGB_DEFAULT_PIN
+#endif // ESP32 
 
 const char* PARAM_PIN = "pin";
 const char* PARAM_VALUE = "value";
@@ -95,6 +96,7 @@ void response_500(AsyncWebServerRequest *request, const String &what)
 }
 
 #ifdef ESP32
+#ifdef RGB_DEFAULT_PIN
 // Helper: Parse 6-character hex color string to RGB components
 // Input: "FF0000" or "ff0000" (red)
 // Returns: true if valid, sets r, g, b parameters
@@ -120,25 +122,14 @@ bool parseHexColor(const String& hex, uint8_t& r, uint8_t& g, uint8_t& b) {
 
 // Helper: Initialize or reinitialize RGB LED strip
 // Returns: true if successful, false if parameters invalid
-bool rgbBegin(uint8_t pin, uint8_t num_leds, String& error_msg) {
-    // Validate LED count
-    if (num_leds < 1 || num_leds > RGB_MAX_LEDS) {
-        error_msg = "Number of LEDs must be 1-" + String(RGB_MAX_LEDS);
-        return false;
-    }
-
-    // Store configuration
-    rgb_num_leds = num_leds;
-    rgb_pin = pin;
-
+bool rgbBegin(String& error_msg) {
     FastLED.clear();
-    
     // Clear LED array
     memset(rgb_leds, 0, sizeof(rgb_leds));
-    
+
     // Initialize FastLED with default pin
     // Note: Pin is ignored from parameter, uses compile-time RGB_DEFAULT_PIN instead
-    FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>(rgb_leds, num_leds);
+    FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>(rgb_leds, RGB_NUMBER);
 
     FastLED.setBrightness(rgb_brightness);
 
@@ -148,11 +139,12 @@ bool rgbBegin(uint8_t pin, uint8_t num_leds, String& error_msg) {
     UNLOCK();
 
     rgb_initialized = true;
-    LOG_INFO("RGB initialized: pin=" << pin << " leds=" << num_leds);
+    LOG_INFO("RGB initialized: pin=" << RGB_DEFAULT_PIN << " leds=" << RGB_NUMBER);
 
     return true;
 }
-#endif
+#endif // RGB_DEFAULT_PIN
+#endif // ESP32
 
 void setup() {
     LOG_BEGIN(115200);
@@ -442,6 +434,7 @@ void setup() {
     });
 
 #ifdef ESP32
+#ifdef RGB_DEFAULT_PIN
     // POST request to <IP>/rgb
     // action=begin&pin=<gpio>&number=<count>
     // action=brightness&value=<0-255>
@@ -467,20 +460,8 @@ void setup() {
 
         // Handle 'begin' action
         if (action == "begin") {
-            if (!request->hasParam(PARAM_PIN, true)) {
-                response_400(request, NO_FORM_PARAM, PARAM_PIN);
-                return;
-            }
-            if (!request->hasParam(PARAM_NUMBER, true)) {
-                response_400(request, NO_FORM_PARAM, PARAM_NUMBER);
-                return;
-            }
-
-            uint8_t pin = request->getParam(PARAM_PIN, true)->value().toInt();
-            uint8_t num = request->getParam(PARAM_NUMBER, true)->value().toInt();
-
             String error_msg;
-            if (!rgbBegin(pin, num, error_msg)) {
+            if (!rgbBegin(error_msg)) {
                 response_500(request, error_msg);
                 return;
             }
@@ -539,7 +520,7 @@ void setup() {
             }
 
             // Set all LEDs to the same color
-            for (uint8_t i = 0; i < rgb_num_leds; i++) {
+            for (uint8_t i = 0; i < RGB_NUMBER; i++) {
                 rgb_leds[i] = CRGB(r, g, b);
             }
 
@@ -556,7 +537,8 @@ void setup() {
         // Unknown action
         response_400(request, INCORRECT_VALUE, PARAM_ACTION);
     });
-#endif
+#endif // RGB_DEFAULT_PIN
+#endif // ESP32
 
     // GET request to <IP>/version
     // read framework version
