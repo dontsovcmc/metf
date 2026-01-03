@@ -131,17 +131,11 @@ bool rgbBegin(uint8_t pin, uint8_t num_leds, String& error_msg) {
     rgb_num_leds = num_leds;
     rgb_pin = pin;
 
-    // Clear existing LEDs if reinitializing
-    if (rgb_initialized) {
-        memset(rgb_leds, 0, sizeof(rgb_leds));
-        LOCK();
-        FastLED.show();
-        UNLOCK();
-    }
-
+    FastLED.clear();
+    
     // Clear LED array
     memset(rgb_leds, 0, sizeof(rgb_leds));
-
+    
     // Initialize FastLED with default pin
     // Note: Pin is ignored from parameter, uses compile-time RGB_DEFAULT_PIN instead
     FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>(rgb_leds, num_leds);
