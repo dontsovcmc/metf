@@ -116,10 +116,80 @@ code 200: response
 code 500: error message
 
 
-### ESP Firmware 
+### ESP Firmware
 
 Based on https://github.com/me-no-dev/ESPAsyncWebServer
 
+## RGB LED Control
+
+### Initialize RGB Strip
+```
+api.rgb_begin(pin, number)
+```
+What ESP do:
+```cpp
+FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>(leds, number)
+```
+Parameters:
+- `pin`: GPIO pin number (currently ignored, see note below)
+- `number`: Number of LEDs (1-10)
+
+**Note:** Due to FastLED library limitations, the pin is fixed at compile time to `RGB_DEFAULT_PIN` (default: GPIO 8). To use a different pin, modify `RGB_DEFAULT_PIN` in `main.cpp` and recompile.
+
+Return: 'OK'
+
+### Set Brightness
+```
+api.rgb_brightness(value)
+```
+What ESP do:
+```cpp
+FastLED.setBrightness(value)
+FastLED.show()
+```
+Parameters:
+- `value`: Brightness level (0-255)
+
+Return: 'OK'
+
+### Set Color
+```
+api.rgb_color(hex_color)
+```
+What ESP do:
+```cpp
+// Set all LEDs to specified color
+for (i = 0; i < num_leds; i++) {
+    leds[i] = CRGB(r, g, b)
+}
+FastLED.show()
+```
+Parameters:
+- `hex_color`: RGB color in hex format (e.g., "FF0000" for red, "00FF00" for green)
+
+Return: 'OK'
+
+### Example
+```python
+from ESPTestFramework import ESPTestFramework
+
+api = ESPTestFramework(host)
+
+# Initialize 1 LED (uses GPIO 8 by default)
+api.rgb_begin(pin=8, number=1)
+
+# Set to red at full brightness
+api.rgb_color("FF0000")
+
+# Dim to 50%
+api.rgb_brightness(128)
+
+# Change to green
+api.rgb_color("00FF00")
+
+# Turn off (brightness 0)
+api.rgb_brightness(0)
+```
 
 ## Examples
 

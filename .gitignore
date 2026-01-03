@@ -10,4 +10,6 @@
 .vscode/launch.json
 .vscode/ipch
 
+secrets.ini
 
+.claude
