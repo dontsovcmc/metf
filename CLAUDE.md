@@ -40,6 +40,16 @@ pio device monitor -e nodemcuv2
 pio device monitor -e esp32-c6-super-mini
 ```
 
+### Running Tests
+
+```bash
+# Run unit tests (uploads test firmware to device)
+pio test -e nodemcuv2
+
+# Run tests for specific environment
+pio test -e esp32-c6-super-mini
+```
+
 ### Configuration
 
 Before building, copy `secrets.ini.template` to `secrets.ini` and fill in WiFi credentials:
@@ -190,7 +200,7 @@ The framework dynamically switches serial baudrates via `/serial` endpoint:
 - Library: ESP Async WebServer 1.2.3
 
 #### ESP32-C6 (esp32-c6-super-mini)
-- Upload port: `/dev/cu.usbmodem21301`
+- Upload port: `/dev/cu.usbmodem1201`
 - Monitor port: `/dev/cu.usbserial-2110`
 - Upload speed: 460800
 - Library: mathieucarbou/ESPAsyncWebServer (fork with C6 support)
