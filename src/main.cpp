@@ -38,6 +38,7 @@ static uint8_t rgb_brightness = 255; // Current brightness (0-255)
 
 const char* PARAM_PIN = "pin";
 const char* PARAM_VALUE = "value";
+const char* PARAM_DURATION_MS = "duration_ms";
 const char* PARAM_MSEC = "msec";
 const char* PARAM_MODE = "mode";
 const char* PARAM_INVERT  = "invert";
@@ -233,6 +234,35 @@ void setup() {
         request->send(200, "text/plain", "OK");
     });
 
+    // POST /pulse  form: pin=<n>&duration_ms=<ms>&value=<0|1>
+    server.on("/pulse", HTTP_POST, [](AsyncWebServerRequest *request){
+
+        if (!request->hasParam(PARAM_PIN, true)) {
+            response_400(request, NO_FORM_PARAM, PARAM_PIN);
+            return;
+        }
+
+        if (!request->hasParam(PARAM_DURATION_MS, true)) {
+            response_400(request, NO_FORM_PARAM, PARAM_DURATION_MS);
+            return;
+        }
+
+        if (!request->hasParam(PARAM_VALUE, true)) {
+            response_400(request, NO_FORM_PARAM, PARAM_VALUE);
+            return;
+        }
+
+        uint8_t pin   = request->getParam(PARAM_PIN, true)->value().toInt();
+        uint8_t value = request->getParam(PARAM_VALUE, true)->value().toInt();
+        uint32_t ms   = request->getParam(PARAM_DURATION_MS, true)->value().toInt();
+
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, value);
+        delay(ms);                 // выдержка на самом ESP, точная
+        pinMode(pin, INPUT);       // отпускаем линию в high-Z (как press_low)
+        request->send(200, "text/plain", "OK");
+    });
+  
     server.on("/i2c", HTTP_POST, [](AsyncWebServerRequest *request){
         String action, hexstring;
         uint8_t sda_pin = SDA, scl_pin = SCL, b, address, len;

@@ -55,6 +55,21 @@ What ESP do:
 ```digitalWrite(pin, value)```
 Return: 'OK'
 
+### pulse
+Drive a pin to `value` for `duration_ms` milliseconds, then release it to high-Z (INPUT).
+Handy for simulating a precise button press — the timing happens on the ESP itself.
+```
+api.pulse(pin, value, duration_ms)
+```
+What ESP do:
+```
+pinMode(pin, OUTPUT)
+digitalWrite(pin, value)
+delay(duration_ms)
+pinMode(pin, INPUT)   # release line to high-Z
+```
+Return: 'OK'
+
 ## i2c communication
 
 ### Start

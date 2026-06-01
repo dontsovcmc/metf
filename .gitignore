@@ -13,3 +13,7 @@
 secrets.ini
 
 .claude
+
+# build artifacts
+*.bin
+*.elf
