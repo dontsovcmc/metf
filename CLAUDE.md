@@ -79,6 +79,7 @@ The main application implements an `AsyncWebServer` on port 80 with HTTP endpoin
 
 - `/ping` - Connectivity test
 - `/pinMode`, `/digitalRead`, `/digitalWrite` - GPIO control
+- `/pulse` - Drive a pin to a value for `duration_ms`, then release it to high-Z (INPUT); precise ESP-side timing for simulating button presses
 - `/i2c` - I2C communication with actions: begin, setClock, setClockStretchLimit, ask, flush
 - `/serial` - Serial port configuration (baudrate switching)
 - `/read` - Read accumulated serial data from AsyncSerialBuffer
@@ -176,10 +177,12 @@ WS2812B addressable LED strip support via FastLED library.
 
 Standard build flags defined in `platformio.ini`:
 
-- `-DMETF_VERSION="2"` - Protocol version (exposed via `/version` endpoint)
+- `-DMETF_VERSION="3"` - Protocol version (exposed via `/version` endpoint)
 - `-DLOG_LEVEL_DEBUG` - Enable debug logging
 - `-DSSID_NAME` / `-DSSID_PASS` - WiFi credentials from `secrets.ini`
 - `-D ESP32_C6_env` - ESP32-C6 specific flag
+- `-DARDUINO_USB_MODE=1` - Use the native USB Serial/JTAG CDC (ESP32-C6 has no USB-OTG)
+- `-DARDUINO_USB_CDC_ON_BOOT=1` - Route `Serial` to the native USB CDC, enabled on boot
 - `-DRGB_DEFAULT_PIN=<pin>` - GPIO pin for RGB LED data line (ESP32 only, optional - required to enable RGB support)
 - `-DRGB_NUMBER=<count>` - Number of WS2812B LEDs in the strip (ESP32 only, optional, default: 1)
 
