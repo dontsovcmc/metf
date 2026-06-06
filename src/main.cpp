@@ -18,6 +18,17 @@
 #define VALUE(x) VALUE_TO_STRING(x)
 #define VAR_NAME_VALUE(var) #var "=" VALUE(var)
 
+// Serial port used to talk to the device-under-test (DUT).
+// With ARDUINO_USB_CDC_ON_BOOT=1 (ESP32-C6 native USB), `Serial` is the USB CDC,
+// so the DUT must be read from Serial0 (UART0 pins). METF's own logs keep using
+// `Serial` (USB CDC). On ESP8266 / non-CDC ESP32, Serial0 == Serial == UART0,
+// and Serial0 is never referenced on ESP8266 (macro resolves to Serial there).
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT)
+  #define METF_SERIAL Serial0
+#else
+  #define METF_SERIAL Serial
+#endif
+
 AsyncWebServer server(80);
 AsyncSerialBuffer asb;
 
@@ -149,6 +160,7 @@ bool rgbBegin(String& error_msg) {
 
 void setup() {
     LOG_BEGIN(115200);
+    METF_SERIAL.begin(DEFAULT_BAUDRATE);
     LOG_INFO("");
     LOG_INFO("Welcome to ESP Test Framework. Have a nice tests!");
 
@@ -433,8 +445,8 @@ void setup() {
         if (nb != current_baud) {
             // Короткая критическая секция: останавливаем приём и переключаем UART
             LOCK();
-            Serial.end();
-            Serial.begin(nb);
+            METF_SERIAL.end();
+            METF_SERIAL.begin(nb);
             current_baud = nb;
             UNLOCK();
 
@@ -582,7 +594,7 @@ void setup() {
 }
 
 void loop() {
-    while (Serial.available() > 0) {
-        asb.pushChar((char)Serial.read());
+    while (METF_SERIAL.available() > 0) {
+        asb.pushChar((char)METF_SERIAL.read());
     }
 }
