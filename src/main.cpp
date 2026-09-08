@@ -72,6 +72,15 @@ static const uint32_t kAllowedBauds[] = {
   57600, 74880, 115200, 230400, 250000, 460800, 921600
 };
 
+// Параметр из тела POST, а если там нет - из строки запроса. `hasParam(name)`
+// без второго аргумента смотрит только строку запроса, поэтому у /serial и
+// baudrate, и flush молча не применялись: клиент шлёт их формой в теле.
+static const AsyncWebParameter* param_any(AsyncWebServerRequest *request, const char *name) {
+    if (request->hasParam(name, true)) return request->getParam(name, true);
+    if (request->hasParam(name))       return request->getParam(name);
+    return nullptr;
+}
+
 bool isAllowedBaud(uint32_t b) {
   for (auto v : kAllowedBauds) if (v == b) return true;
   return false;
@@ -432,9 +441,9 @@ void setup() {
     server.on("/serial", HTTP_POST, [](AsyncWebServerRequest* request){
         String out;
         uint32_t nb = DEFAULT_BAUDRATE;
-        if (request->hasParam(PARAM_BAUDRATE)) {
-            String sv = request->getParam(PARAM_BAUDRATE)->value();
-            nb = (uint32_t) sv.toInt();
+        const AsyncWebParameter *baud = param_any(request, PARAM_BAUDRATE);
+        if (baud) {
+            nb = (uint32_t) baud->value().toInt();
         }
 
         if (nb == 0 || !isAllowedBaud(nb)) {
@@ -455,17 +464,34 @@ void setup() {
             out = "Baudrate is " + String(nb);
         }
 
-        if (request->hasParam("flush")) {
-            String fv = request->getParam("flush")->value();
-            if (fv == "1") {
-                asb.flush();
-                out += ", flush buffer";
-            }
+        const AsyncWebParameter *flush = param_any(request, "flush");
+        if (flush && flush->value() == "1") {
+            asb.flush();
+            out += ", flush buffer";
         }
         
         request->send(200, "text/plain; charset=utf-8", out);
     });
 
+
+    // GET request to <IP>/read/stat
+    // состояние кольца лога: сколько строк лежит, сколько вытеснено, на какой
+    // скорости читаем UART. dropped > 0 - в логе дыра, читателю верить нельзя.
+    //
+    // Регистрируется ДО /read: обработчик подходит и по префиксу
+    // (`url.startsWith(_uri + "/")` в AsyncCallbackWebHandler::canHandle),
+    // поэтому /read, объявленный первым, перехватил бы и /read/stat.
+    server.on("/read/stat", HTTP_GET, [](AsyncWebServerRequest *request){
+
+        String out = "{\"lines\":" + String((uint32_t)asb.count())
+                   + ",\"dropped\":" + String(asb.dropped())
+                   + ",\"baud\":" + String(current_baud)
+                   + ",\"capacity\":" + String((uint32_t)(ASB_MAX_LINES - 1))
+                   + ",\"line_len\":" + String((uint32_t)ASB_MAX_LINE_LEN)
+                   + ",\"bytes\":" + String((uint32_t)ASB_MAX_LINES * ASB_MAX_LINE_LEN)
+                   + "}";
+        request->send(200, "application/json", out);
+    });
 
     server.on("/read", HTTP_GET, [](AsyncWebServerRequest *request){
 

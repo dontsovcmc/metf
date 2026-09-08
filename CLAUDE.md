@@ -60,6 +60,25 @@ wifi_ssid=YourWiFiSSID
 wifi_password=YourWiFiPassword
 ```
 
+`secrets.ini` is git-ignored - credentials never go into the repository. They are
+compiled into the firmware as `SSID_NAME` / `SSID_PASS` build flags, so the
+network is fixed at **build time**: the board joins whatever was in the file when
+it was flashed. Reflashing with different credentials moves the board to another
+network and another address, and a harness addressing it by IP simply stops
+getting answers - there is no error to see. Check the file before every upload.
+
+The upload port belongs on the command line, not in `platformio.ini` - the value
+there goes stale as soon as the board is replugged:
+
+```bash
+ls /dev/cu.*     # ESP32-C6 SuperMini is a native USB CDC port: usbmodem*
+pio run -e esp32-c6-super-mini -t upload --upload-port /dev/cu.usbmodemXXXX
+```
+
+The board prints `IP Address:` to the USB console (115200) at boot; it does not
+name the network, so that address is the only clue that it joined the network you
+expected. `curl http://<ip>/version` confirms it is up.
+
 ## Architecture and Code Structure
 
 ### Multi-Platform Support
@@ -83,6 +102,7 @@ The main application implements an `AsyncWebServer` on port 80 with HTTP endpoin
 - `/i2c` - I2C communication with actions: begin, setClock, setClockStretchLimit, ask, flush
 - `/serial` - Serial port configuration (baudrate switching)
 - `/read` - Read accumulated serial data from AsyncSerialBuffer
+- `/read/stat` - Ring buffer state as JSON: `lines`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`. Registered **before** `/read`: `AsyncCallbackWebHandler::canHandle` also matches by prefix (`url.startsWith(_uri + "/")`), so `/read` declared first would swallow `/read/stat`
 - `/version` - Get framework version
 
 **Important I2C handling differences:**
@@ -94,16 +114,20 @@ The main application implements an `AsyncWebServer` on port 80 with HTTP endpoin
 A thread-safe circular buffer for capturing serial data asynchronously:
 
 - Accumulates incoming serial data in `loop()` without blocking web requests
-- Stores lines in a ring buffer (`ASB_MAX_LINES` × `ASB_MAX_LINE_LEN`)
+- Stores lines in a ring buffer sized by one constant, `ASB_BUFFER_BYTES`; `ASB_MAX_LINES` is derived from it and `ASB_MAX_LINE_LEN`
 - Uses critical sections for thread safety:
   - ESP32: FreeRTOS spinlocks (`portENTER_CRITICAL`/`portEXIT_CRITICAL`)
   - ESP8266: Interrupt disable (`noInterrupts()`/`interrupts()`)
 - Handles line overflow by auto-wrapping and evicting oldest lines
+- Counts evicted lines in `dropped()`; the counter resets on `flush()` and is exposed via `/read/stat`. Eviction is silent otherwise, and a silently shortened log makes tests green for the wrong reason
 - `drain_to()` outputs all accumulated lines and clears the buffer
 
 **Configuration via build flags:**
-- `-DASB_MAX_LINES=100` - Maximum number of buffered lines
+- `-DASB_BUFFER_BYTES=6000` - Bytes given to the log; the number of lines is derived from it
 - `-DASB_MAX_LINE_LEN=60` - Maximum characters per line
+- `-DASB_MAX_LINES=100` - Number of lines, if set directly it wins over the derived value
+
+Defaults suit the ESP8266. `esp32-c6-super-mini` sets 64 KB / 128 characters (511 lines) - a full Waterius session fits without eviction.
 
 #### 3. **Logging System (`logging.h`)**
 
@@ -177,12 +201,14 @@ WS2812B addressable LED strip support via FastLED library.
 
 Standard build flags defined in `platformio.ini`:
 
-- `-DMETF_VERSION="3"` - Protocol version (exposed via `/version` endpoint)
+- `-DMETF_VERSION="5"` - Protocol version (exposed via `/version` endpoint); 5 added `/read/stat`
 - `-DLOG_LEVEL_DEBUG` - Enable debug logging
 - `-DSSID_NAME` / `-DSSID_PASS` - WiFi credentials from `secrets.ini`
 - `-D ESP32_C6_env` - ESP32-C6 specific flag
 - `-DARDUINO_USB_MODE=1` - Use the native USB Serial/JTAG CDC (ESP32-C6 has no USB-OTG)
 - `-DARDUINO_USB_CDC_ON_BOOT=1` - Route `Serial` to the native USB CDC, enabled on boot
+- `-DASB_BUFFER_BYTES=<bytes>` - Size of the serial log ring buffer (default 6000)
+- `-DASB_MAX_LINE_LEN=<chars>` - Characters per buffered line (default 60)
 - `-DRGB_DEFAULT_PIN=<pin>` - GPIO pin for RGB LED data line (ESP32 only, optional - required to enable RGB support)
 - `-DRGB_NUMBER=<count>` - Number of WS2812B LEDs in the strip (ESP32 only, optional, default: 1)
 
