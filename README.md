@@ -58,13 +58,16 @@ pass `--upload-port` instead of editing the file.
 The framework prints its address to the USB serial console at boot (115200):
 
 ```
+METF version: 5
 Welcome to ESP Test Framework. Have a nice tests!
+Connect to wi-fi ssid: <the one compiled in>
 IP Address: 192.168.x.x
 ```
 
-The console does not name the network - it is whatever `secrets.ini` held when
-the firmware was built - so `IP Address` is the only clue that the board joined
-the network you expected. Compare it with the address your harness uses.
+The SSID line is the one to read after an upload: the network is compiled in, so
+this is the only place the board says which one it went for. An address outside
+the range your harness expects means the credentials in `secrets.ini` were not
+the ones you thought.
 
 ```bash
 pio device monitor -e esp32-c6-super-mini --port /dev/cu.usbmodemXXXX
