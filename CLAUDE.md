@@ -75,9 +75,10 @@ ls /dev/cu.*     # ESP32-C6 SuperMini is a native USB CDC port: usbmodem*
 pio run -e esp32-c6-super-mini -t upload --upload-port /dev/cu.usbmodemXXXX
 ```
 
-The board prints `IP Address:` to the USB console (115200) at boot; it does not
-name the network, so that address is the only clue that it joined the network you
-expected. `curl http://<ip>/version` confirms it is up.
+At boot the board prints its protocol version, the SSID it is joining and the
+address it got, to the USB console at 115200. The SSID line is the one to read
+after an upload - it is the only place the compiled-in network is visible.
+`curl http://<ip>/version` confirms the board is up.
 
 ## Architecture and Code Structure
 
