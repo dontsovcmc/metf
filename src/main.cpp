@@ -170,10 +170,23 @@ bool rgbBegin(String& error_msg) {
 void setup() {
     LOG_BEGIN(115200);
     METF_SERIAL.begin(DEFAULT_BAUDRATE);
-    LOG_INFO("");
+
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+    // Нативный USB CDC поднимается уже после старта прошивки, и всё, что
+    // напечатано раньше, уходит в никуда - вместе с адресом платы. На обычном
+    // UART порт готов сразу, и ждать незачем.
+    delay(2000);
+#endif
+
+    LOG_INFO("METF version: " << METF_VERSION);
     LOG_INFO("Welcome to ESP Test Framework. Have a nice tests!");
+    // Сеть вкомпилирована в прошивку: увидеть, к какой именно плата идёт,
+    // больше негде, а заливка с другими кредами уводит её со стенда молча
+    LOG_INFO("Connect to wi-fi ssid: " << VALUE(SSID_NAME));
 
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect();          // начинаем с известного состояния, а не с того,
+    delay(300);                 // что осталось от прошлой прошивки
     WiFi.begin(VALUE(SSID_NAME), VALUE(SSID_PASS));
     if (WiFi.waitForConnectResult() != WL_CONNECTED) {
         LOG_ERROR("WiFi Failed!");
