@@ -16,6 +16,64 @@ Change platformio.ini file to use another WeMos or etc.
 2. Connect you device to NodeMCU, turn on NodeMCU. Web server runs.
 3. Write Python test script and run it.
 
+## Flashing the board
+
+### WiFi credentials
+
+The board joins one WiFi network and serves HTTP on it. The network is chosen at
+**build time**, not at run time: `SSID_NAME` and `SSID_PASS` are compiled in from
+`secrets.ini`, which is git-ignored and never committed.
+
+```bash
+cp secrets.ini.template secrets.ini    # fill in wifi_ssid / wifi_password
+```
+
+`platformio.ini` passes them on as build flags:
+
+```
+-D SSID_NAME=${secrets.wifi_ssid}
+-D SSID_PASS=${secrets.wifi_password}
+```
+
+Reflashing with different credentials moves the board to a different network and
+a different address, and a test harness that addresses it by IP loses it without
+any error - it just stops answering. Check `secrets.ini` before every upload:
+the credentials in the file are the ones that end up on the board, not the ones
+that are on it now.
+
+### Upload
+
+```bash
+ls /dev/cu.*                                   # find the port, do not hardcode it
+pio run -e esp32-c6-super-mini -t upload --upload-port /dev/cu.usbmodemXXXX
+```
+
+The ESP32-C6 SuperMini shows up as a native USB CDC port (`usbmodem*`); a board
+behind a USB-UART bridge shows up as `usbserial-*`. `upload_port` in
+`platformio.ini` is a default and goes stale whenever the board is replugged -
+pass `--upload-port` instead of editing the file.
+
+### Finding the board on the network
+
+The framework prints its address to the USB serial console at boot (115200):
+
+```
+Welcome to ESP Test Framework. Have a nice tests!
+IP Address: 192.168.x.x
+```
+
+The console does not name the network - it is whatever `secrets.ini` held when
+the firmware was built - so `IP Address` is the only clue that the board joined
+the network you expected. Compare it with the address your harness uses.
+
+```bash
+pio device monitor -e esp32-c6-super-mini --port /dev/cu.usbmodemXXXX
+curl http://<ip>/version        # answers with the protocol version
+```
+
+The address comes from DHCP, so pin it on the router if the harness addresses
+the board by IP.
+
 ## Actions
 
 ### ping
@@ -130,6 +188,54 @@ Return:
 code 200: response
 code 500: error message
 
+
+## Serial log
+
+The board mirrors the DUT serial output into a ring buffer and hands it out on
+request.
+
+### read
+
+```
+text = api.serial_read()          # GET /read
+```
+
+Returns everything accumulated since the last read and empties the buffer.
+Lines longer than `ASB_MAX_LINE_LEN` are split into several buffer lines, so the
+caller has to glue them back together.
+
+### read/stat
+
+```
+GET /read/stat
+{"lines":12,"dropped":0,"baud":115200,"capacity":511,"line_len":128,"bytes":65536}
+```
+
+| field | meaning |
+|---|---|
+| `lines` | lines waiting to be read |
+| `dropped` | lines evicted since the last flush because the ring was full |
+| `baud` | current speed of the DUT serial port |
+| `capacity` | how many lines the ring holds |
+| `line_len` | characters per line, including the terminator |
+| `bytes` | total size of the ring |
+
+**`dropped > 0` means the log has a hole in it.** Eviction is silent - a test
+reading the log after that sees a shorter log, not an error, and goes green for
+the wrong reason. Check the counter before trusting the log, and give the buffer
+more room (see below) or read more often.
+
+### Buffer size
+
+Set by build flags; the size is one number, the geometry is derived from it:
+
+- `-DASB_BUFFER_BYTES=65536` - bytes given to the log (default 6000)
+- `-DASB_MAX_LINE_LEN=128` - characters per line (default 60)
+- `-DASB_MAX_LINES=...` - number of lines, if you would rather set it directly
+
+Defaults are sized for the ESP8266. On ESP32 there is far more RAM: the
+ESP32-C6 has 512 KB of SRAM, and the `esp32-c6-super-mini` environment gives the
+log 64 KB - 511 lines of 128 characters, enough for a full device session.
 
 ### ESP Firmware
 

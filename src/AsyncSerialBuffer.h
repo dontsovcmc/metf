@@ -2,13 +2,29 @@
 #include <Arduino.h>
 #include <cstring>
 
-// Переопределяемо флагами сборки: -DASB_MAX_LINES=... -DASB_MAX_LINE_LEN=...
-#ifndef ASB_MAX_LINES
-#define ASB_MAX_LINES 100
+// Размер кольца задаётся одной константой - сколько байт отдано под лог.
+// Число строк производное: длинную строку кольцо всё равно режет на куски по
+// ASB_MAX_LINE_LEN, поэтому вмещается не «сто строк», а объём. Значения по
+// умолчанию - прежние 100 x 60, они рассчитаны на ESP8266; у ESP32 памяти на
+// порядок больше, и объём задаётся флагом в platformio.ini.
+//
+// Переопределяемо флагами сборки:
+//   -DASB_BUFFER_BYTES=...   объём кольца, байт
+//   -DASB_MAX_LINE_LEN=...   максимум символов в строке (с нуль-терминатором)
+//   -DASB_MAX_LINES=...      если нужно задать число строк напрямую
+#ifndef ASB_BUFFER_BYTES
+#define ASB_BUFFER_BYTES 6000
 #endif
 #ifndef ASB_MAX_LINE_LEN
 #define ASB_MAX_LINE_LEN 60
 #endif
+#ifndef ASB_MAX_LINES
+#define ASB_MAX_LINES (ASB_BUFFER_BYTES / ASB_MAX_LINE_LEN)
+#endif
+
+// Одна ячейка кольца всегда свободна - иначе полное кольцо неотличимо от
+// пустого, а на двух строках вытеснение съедало бы весь лог.
+static_assert(ASB_MAX_LINES >= 3, "ASB_BUFFER_BYTES слишком мал для ASB_MAX_LINE_LEN");
 
 // Критические секции
 #ifdef ARDUINO_ARCH_ESP32
@@ -32,6 +48,11 @@ public:
   // Количество готовых строк
   size_t count() const;
 
+  // Сколько строк вытеснено с последнего flush(). Не ноль означает, что лог
+  // читали медленнее, чем он приходил, и в нём дыра: молчаливая потеря делает
+  // тест ложно-зелёным, поэтому счётчик отдаётся наружу в /read/stat.
+  uint32_t dropped() const;
+
   // Принять байт из входного потока (например, из Serial.read())
   void pushChar(char c);
 
@@ -51,6 +72,7 @@ private:
   size_t cur_len_;                                // длина текущей строки
   volatile size_t head_;                          // индекс записи
   volatile size_t tail_;                          // индекс чтения
+  volatile uint32_t dropped_;                     // вытеснено строк с flush()
 
   // Нельзя копировать
   AsyncSerialBuffer(const AsyncSerialBuffer&) = delete;
