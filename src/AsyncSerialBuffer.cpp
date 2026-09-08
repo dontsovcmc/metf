@@ -28,10 +28,11 @@ size_t AsyncSerialBuffer::count() const {
 }
 
 uint32_t AsyncSerialBuffer::dropped() const {
-  LOCK();
-  uint32_t d = dropped_;
-  UNLOCK();
-  return d;
+  // Без блокировки, в отличие от count(): там два индекса и они должны быть
+  // согласованы, а здесь одно выровненное 32-битное поле - чтение атомарно.
+  // LOCK() на ESP32 - это спинлок с запретом прерываний, и брать его ради
+  // одного слова значит глушить приём UART на время запроса /read/stat.
+  return dropped_;
 }
 
 void AsyncSerialBuffer::push_line_locked_unchecked() {
