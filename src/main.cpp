@@ -13,6 +13,7 @@
 #include "logging.h"
 #include "utils.h"
 #include "AsyncSerialBuffer.h"
+#include "NtpServer.h"
 
 #define VALUE_TO_STRING(x) #x
 #define VALUE(x) VALUE_TO_STRING(x)
@@ -31,6 +32,10 @@
 
 AsyncWebServer server(80);
 AsyncSerialBuffer asb;
+
+#ifdef ESP32
+NtpServer ntp;
+#endif
 
 // RGB LED Support
 #ifdef ESP32
@@ -54,6 +59,7 @@ const char* PARAM_MSEC = "msec";
 const char* PARAM_MODE = "mode";
 const char* PARAM_INVERT  = "invert";
 const char* PARAM_ACTION = "action";
+const char* PARAM_EPOCH = "epoch";
 const char* PARAM_SDA_PIN = "sda_pin";
 const char* PARAM_SCL_PIN = "scl_pin";
 const char* PARAM_ADDRESS = "address";
@@ -193,7 +199,10 @@ void setup() {
         return;
     }
 
-    LOG_INFO("IP Address: " << WiFi.localIP());
+    // MAC нужен, чтобы закрепить за платой адрес на роутере: без этого она
+    // после каждой перезагрузки берёт что дали, и стенд теряет её молча
+    LOG_INFO("IP Address: " << WiFi.localIP() << " MAC: " << WiFi.macAddress()
+             << " gateway: " << WiFi.gatewayIP() << " mask: " << WiFi.subnetMask());
 
     // GET request to <IP>/ping
     server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -619,6 +628,83 @@ void setup() {
         response_400(request, INCORRECT_VALUE, PARAM_ACTION);
     });
 #endif // RGB_DEFAULT_PIN
+#endif // ESP32
+
+#ifdef ESP32
+    /*
+    GET <IP>/ntp/stat - состояние сервера времени.
+
+    Объявлен раньше /ntp: canHandle у AsyncCallbackWebHandler совпадает и по
+    префиксу, и объявленный первым /ntp проглотил бы /ntp/stat.
+    */
+    server.on("/ntp/stat", HTTP_GET, [](AsyncWebServerRequest *request){
+
+        NtpServer::Stat st = ntp.stat();
+        String out = String("{\"running\":") + (ntp.running() ? "true" : "false")
+                   + ",\"dropping\":" + (ntp.dropping() ? "true" : "false")
+                   + ",\"epoch\":" + String(ntp.now_epoch())
+                   + ",\"requests\":" + String(st.requests)
+                   + ",\"replies\":" + String(st.replies)
+                   + ",\"dropped\":" + String(st.dropped)
+                   + ",\"ignored\":" + String(st.ignored)
+                   + ",\"last_epoch\":" + String(st.last_epoch)
+                   + ",\"last_client\":\"" + st.last_client.toString() + "\""
+                   + "}";
+        request->send(200, "application/json", out);
+    });
+
+    /*
+    POST <IP>/ntp - сервер времени стенда.
+
+    action=start&epoch=<unix>  начать отвечать, назначив время
+    action=time&epoch=<unix>   переставить часы, не трогая слушателя
+    action=stop                перестать слушать: клиенту придёт отказ порта
+    action=drop&value=<0|1>    слушать, но молчать: клиент дождётся таймаута
+    */
+    server.on("/ntp", HTTP_POST, [](AsyncWebServerRequest *request){
+
+        if (!request->hasParam(PARAM_ACTION, true)) {
+            response_400(request, NO_FORM_PARAM, PARAM_ACTION);
+            return;
+        }
+        String action = request->getParam(PARAM_ACTION, true)->value();
+        LOG_INFO("POST /ntp action=" << action);
+
+        if (action == "start" || action == "time") {
+            if (!request->hasParam(PARAM_EPOCH, true)) {
+                response_400(request, NO_FORM_PARAM, PARAM_EPOCH);
+                return;
+            }
+            uint32_t epoch = (uint32_t)strtoul(
+                request->getParam(PARAM_EPOCH, true)->value().c_str(), NULL, 10);
+            if (epoch == 0) {
+                response_400(request, INCORRECT_VALUE, PARAM_EPOCH);
+                return;
+            }
+            if (action == "time") {
+                ntp.set_time(epoch);
+            } else if (!ntp.begin(epoch)) {
+                request->send(500, "text/plain", "unable to listen on udp 123");
+                return;
+            }
+        }
+        else if (action == "stop") {
+            ntp.stop();
+        }
+        else if (action == "drop") {
+            if (!request->hasParam(PARAM_VALUE, true)) {
+                response_400(request, NO_FORM_PARAM, PARAM_VALUE);
+                return;
+            }
+            ntp.set_drop(request->getParam(PARAM_VALUE, true)->value().toInt() != 0);
+        }
+        else {
+            response_400(request, INCORRECT_VALUE, PARAM_ACTION);
+            return;
+        }
+
+        request->send(200, "text/plain", "ok");
+    });
 #endif // ESP32
 
     // GET request to <IP>/version
