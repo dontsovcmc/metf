@@ -43,12 +43,29 @@ pio device monitor -e esp32-c6-super-mini
 ### Running Tests
 
 ```bash
-# Run unit tests (uploads test firmware to device)
-pio test -e nodemcuv2
+# Host tests: NTP packet rules, no board needed
+pio test -e native
 
-# Run tests for specific environment
+# On-device unit tests (uploads test firmware to the board)
+pio test -e nodemcuv2
 pio test -e esp32-c6-super-mini
 ```
+
+Tests live one directory per suite: `test/test_board` runs on the board,
+`test/test_ntp_packet` on the host. Each environment picks its own with
+`test_filter`, so a host suite is never uploaded and a board suite is never
+compiled without Arduino.
+
+The board's own behaviour - that it really listens on 123, answers, and serves
+the assigned time - is checked from the outside by pytest, standard library
+only:
+
+```bash
+pytest test/board --metf-host <ip> -v
+```
+
+Without `--metf-host` the suite skips: a test that cannot reach a board must
+say so, not time out.
 
 ### Configuration
 
@@ -75,8 +92,11 @@ ls /dev/cu.*     # ESP32-C6 SuperMini is a native USB CDC port: usbmodem*
 pio run -e esp32-c6-super-mini -t upload --upload-port /dev/cu.usbmodemXXXX
 ```
 
-At boot the board prints its protocol version, the SSID it is joining and the
-address it got, to the USB console at 115200. The SSID line is the one to read
+At boot the board prints its protocol version, the SSID it is joining, and the
+address, MAC, gateway and mask it ended up with, to the USB console at 115200.
+The MAC is there so the address can be pinned on the router: an SSID shared by
+two access points puts the board on whichever answers first, and a bench that
+addresses it by IP then simply stops getting answers. The SSID line is the one to read
 after an upload - it is the only place the compiled-in network is visible.
 `curl http://<ip>/version` confirms the board is up.
 
@@ -104,6 +124,8 @@ The main application implements an `AsyncWebServer` on port 80 with HTTP endpoin
 - `/serial` - Serial port configuration (baudrate switching)
 - `/read` - Read accumulated serial data from AsyncSerialBuffer
 - `/read/stat` - Ring buffer state as JSON: `lines`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`. Registered **before** `/read`: `AsyncCallbackWebHandler::canHandle` also matches by prefix (`url.startsWith(_uri + "/")`), so `/read` declared first would swallow `/read/stat`
+- `/ntp` - NTP server for the device under test: `action=start&epoch=<unix>` begins answering with the given time, `action=time&epoch=` moves the clock, `action=stop` releases the port, `action=drop&value=<0|1>` keeps the port but stays silent
+- `/ntp/stat` - NTP server state as JSON: `running`, `dropping`, `epoch`, `requests`, `replies`, `dropped`, `ignored`, `last_epoch`, `last_client`. Registered **before** `/ntp` for the same prefix-matching reason as `/read/stat`
 - `/version` - Get framework version
 
 **Important I2C handling differences:**
@@ -130,7 +152,25 @@ A thread-safe circular buffer for capturing serial data asynchronously:
 
 Defaults suit the ESP8266. `esp32-c6-super-mini` sets 64 KB / 128 characters (511 lines) - a full Waterius session fits without eviction.
 
-#### 3. **Logging System (`logging.h`)**
+#### 3. **NTP server (`NtpServer.h/.cpp`, `ntp_packet.h`)** - ESP32 only
+
+A UDP server on port 123 that answers the device under test with whatever time
+the test assigned. The board has no RTC and no internet: the moment is set over
+HTTP and time runs from `millis()`. That is the point - a bench must work
+offline, and a test must be able to name a recognisable time.
+
+- The listener does **not** start by itself. A board answering NTP on someone
+  else's network unasked is a surprise nobody ordered; `action=start` binds it.
+- `AsyncUDP` (part of the arduino-esp32 core) delivers packets in the lwIP task,
+  so the counters are guarded the same way as in AsyncSerialBuffer.
+- The reply leaves through the pcb bound to 123. Clients - the Waterius among
+  them - accept an answer only when it arrives from the NTP port.
+- `ntp_packet.h` is pure C++ without Arduino, so the protocol rules are checked
+  by host tests (`test/test_ntp_packet`, `pio test -e native`).
+
+ESP8266 has no AsyncUDP in its core, so the whole feature sits behind `#ifdef ESP32`.
+
+#### 4. **Logging System (`logging.h`)**
 
 Macro-based logging with compile-time level control:
 
@@ -141,7 +181,7 @@ Macro-based logging with compile-time level control:
 
 **Important:** Logging uses the same Serial port as AsyncSerialBuffer. When debugging is enabled, log output will be captured by the buffer.
 
-#### 4. **Utility Functions (`lib/utils/src/utils.h`)**
+#### 5. **Utility Functions (`lib/utils/src/utils.h`)**
 
 Helper functions for I2C data formatting:
 
@@ -149,7 +189,7 @@ Helper functions for I2C data formatting:
 - `intToHexChar()` - Convert integer to hex character
 - `hexText2AsciiArray()` - Convert hex string to byte array for I2C transmission
 
-#### 5. **RGB LED Control (ESP32 only, optional)**
+#### 6. **RGB LED Control (ESP32 only, optional)**
 
 WS2812B addressable LED strip support via FastLED library.
 
@@ -202,7 +242,7 @@ WS2812B addressable LED strip support via FastLED library.
 
 Standard build flags defined in `platformio.ini`:
 
-- `-DMETF_VERSION="5"` - Protocol version (exposed via `/version` endpoint); 5 added `/read/stat`
+- `-DMETF_VERSION="6"` - Protocol version (exposed via `/version` endpoint); 5 added `/read/stat`, 6 added `/ntp`
 - `-DLOG_LEVEL_DEBUG` - Enable debug logging
 - `-DSSID_NAME` / `-DSSID_PASS` - WiFi credentials from `secrets.ini`
 - `-D ESP32_C6_env` - ESP32-C6 specific flag
