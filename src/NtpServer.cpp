@@ -5,7 +5,7 @@
 #include "logging.h"
 
 NtpServer::NtpServer()
-    : _running(false), _drop(false), _time_set(false),
+    : _udp(0), _running(false), _drop(false), _time_set(false),
       _base_epoch(0), _base_millis(0), _mux(portMUX_INITIALIZER_UNLOCKED)
 {
     memset(&_stat, 0, sizeof(_stat));
@@ -18,13 +18,16 @@ bool NtpServer::begin(const uint32_t epoch, const uint16_t port)
     if (_running)
         return true;
 
-    if (!_udp.listen(port))
+    _udp = new AsyncUDP();
+    if (_udp == 0 || !_udp->listen(port))
     {
         LOG_ERROR("NTP: unable to listen on port " << port);
+        delete _udp;
+        _udp = 0;
         return false;
     }
 
-    _udp.onPacket([this](AsyncUDPPacket packet) { handle(packet); });
+    _udp->onPacket([this](AsyncUDPPacket packet) { handle(packet); });
 
     _running = true;
     LOG_INFO("NTP: listening on port " << port << ", epoch " << epoch);
@@ -36,7 +39,8 @@ void NtpServer::stop()
     if (!_running)
         return;
 
-    _udp.close();
+    delete _udp;      // деструктор снимает обработчик и освобождает порт
+    _udp = 0;
     _running = false;
     LOG_INFO("NTP: stopped");
 }
