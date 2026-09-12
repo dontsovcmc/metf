@@ -1,0 +1,70 @@
+# How it works
+
+METF is an HTTP-controlled test bench: the ESP board is wired to a device under test (DUT) and exposes GPIO, I2C, the DUT's serial log and an NTP server over HTTP. The main DUT is the Waterius device: several behaviours (NTP request/reply format, log buffer size) are sized and checked against its firmware.
+
+Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP and RGB are ESP32-only.
+
+## Two serial ports on ESP32-C6
+
+`main.cpp` defines `METF_SERIAL`, the port the DUT is read from:
+
+- With `ARDUINO_USB_CDC_ON_BOOT=1` (the C6 env), `Serial` is the native USB CDC and carries METF's own logs; the DUT is read from `Serial0` (UART0 pins). Logs and DUT traffic are separate.
+- On ESP8266 (and non-CDC ESP32), `METF_SERIAL` is `Serial`: logs and the DUT link share UART0, and `/serial` baud changes affect both.
+
+On the C6, `setup()` waits 2 s before printing because the USB CDC comes up after the firmware starts and anything printed earlier is lost.
+
+## Web server (`src/main.cpp`)
+
+`AsyncWebServer` on port 80; all routes are registered in `setup()`, and `loop()` only pumps `METF_SERIAL` into the serial buffer.
+
+| Route | Notes |
+|---|---|
+| `GET /ping`, `GET /version` | connectivity; protocol version |
+| `POST /pinMode`, `GET /digitalRead`, `POST /digitalWrite` | GPIO |
+| `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timing done on the ESP |
+| `POST /i2c` | `action=begin/setClock/setClockStretchLimit/ask/flush`; `ask` takes `address`, `hexstring`, `response` (bytes to read) and returns hex |
+| `POST /serial` | `baudrate` (allow-listed in `kAllowedBauds`) and `flush=1`. A missing `baudrate` means 115200, so a flush-only call resets the speed |
+| `GET /read`, `GET /read/stat` | drain the serial log; ring state as JSON (`lines`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`) |
+| `POST /ntp`, `GET /ntp/stat` | ESP32 only, see below |
+| `POST /rgb` | ESP32 only, compiled only when `RGB_DEFAULT_PIN` is defined |
+
+Parameters, responses and errors of every route: [api.md](api.md).
+
+Conventions and traps:
+
+- **Register `/x/sub` before `/x`.** `AsyncCallbackWebHandler::canHandle` also matches by prefix (`url.startsWith(_uri + "/")`), so `/read` or `/ntp` declared first would swallow `/read/stat` / `/ntp/stat`.
+- POST parameters are form-encoded in the body: use `hasParam(name, true)` / `getParam(name, true)`. Without the second argument only the query string is searched - that silently broke `/serial` once; it now uses `param_any()` (body, then query).
+- Errors: 400 via `response_400()` for missing/incorrect parameters, 500 for hardware failures (I2C errors, UDP bind failure), 404 for unknown routes.
+- ESP8266 I2C stretch limit is `Wire.setClockStretchLimit(us)`; on ESP32 the same action maps to `Wire.setTimeOut(ms)` (µs / 1000, minimum 1000 ms).
+
+## AsyncSerialBuffer (`src/AsyncSerialBuffer.*`)
+
+Ring of fixed-size lines filled from `loop()` and drained by `/read`.
+
+- Sized by one number, `ASB_BUFFER_BYTES`; `ASB_MAX_LINES = ASB_BUFFER_BYTES / ASB_MAX_LINE_LEN` unless `ASB_MAX_LINES` is set directly. One slot is always kept free, so usable capacity (`/read/stat` `capacity`) is `ASB_MAX_LINES - 1`. `ASB_MAX_LINE_LEN` includes the terminator.
+- Defaults (6000 / 60) suit the ESP8266. `esp32-c6-super-mini` uses 65536 / 128 → 511 usable lines, so a full Waterius session fits without eviction.
+- Longer lines are split into several buffer lines; the reader has to glue them back.
+- When full, the oldest line is evicted and counted in `dropped()` (reset by `flush()`, exposed by `/read/stat`). Eviction is otherwise silent, and a silently shortened log makes tests green for the wrong reason - `dropped > 0` means the log has a hole.
+- `LOCK()` / `UNLOCK()` defined here are the project's critical section: a FreeRTOS spinlock (`portENTER_CRITICAL(&mux)`) on ESP32, `noInterrupts()` on ESP8266. `main.cpp` reuses them for baud switching and `FastLED.show()`. On ESP32 they disable interrupts, so keep them short and don't take them for a single aligned word (see `dropped()`).
+
+## NTP server (`src/NtpServer.*`, `src/ntp_packet.h`) - ESP32 only
+
+UDP server on port 123 that answers the DUT with whatever time the test assigned. The board has no RTC and no internet: the moment is set over HTTP and time runs from `millis()`, so a bench works offline and a test can name a recognisable time.
+
+- The listener does **not** start by itself (answering NTP on someone else's network unasked is a surprise); `action=start&epoch=<unix>` binds it.
+- `action=time` moves the clock without touching the listener; `action=stop` closes the port (client gets ICMP port-unreachable); `action=drop&value=1` keeps the port but stays silent (client waits for a timeout, like an unreachable internet server).
+- `stop` deletes the `AsyncUDP` object, and `begin` creates a new one. `AsyncUDP::close()` only drops the remote peer; the port binding and the handler go away only in the destructor (`udp_recv(NULL)` + `udp_remove`), so with one long-lived object a "stopped" server kept answering.
+- `/ntp/stat` returns `running`, `dropping`, `epoch`, `requests`, `replies`, `dropped`, `ignored`, `last_epoch`, `last_client`.
+- `AsyncUDP` delivers packets in the lwIP task, so counters are guarded by the server's own `portMUX_TYPE`, same pattern as AsyncSerialBuffer.
+- The reply leaves through the pcb bound to 123: clients (the Waterius among them) accept an answer only when it comes from the NTP port.
+- `ntp_packet.h` is the protocol, Arduino-free and host-tested. The request format and acceptance rules in the tests are copied from Waterius's `sync_time.cpp` / `core/timekeeping.cpp` (`parse_ntp_packet`): reply ≥ 48 bytes, leap indicator not `11`, transmit seconds after 1970.
+
+ESP8266 has no AsyncUDP in its core, hence the `#ifdef ESP32`.
+
+## RGB LED (ESP32 only, optional)
+
+WS2812B via FastLED, compiled only with `-DRGB_DEFAULT_PIN=<pin>` (C6 env: 8, the onboard LED). Pin and `RGB_NUMBER` are compile-time template parameters of `FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>`, so the `pin`/`number` parameters of `action=begin` are ignored. `begin` must precede `brightness` (0-255) and `color` (6-char hex `RRGGBB`).
+
+## Logging (`src/logging.h`)
+
+`LOG_ERROR/INFO/DEBUG(a << b)` stream macros with an `HH:MM:SS:mmm` uptime prefix, compiled in by `-DLOG_LEVEL_ERROR|INFO|DEBUG`. They always write to `Serial` - see the serial-port section for what that means per platform.
