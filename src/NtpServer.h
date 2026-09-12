@@ -74,7 +74,13 @@ public:
 private:
     void handle(AsyncUDPPacket &packet);
 
-    AsyncUDP _udp;
+    /*
+    Держим объект указателем, потому что освободить порт иначе нечем:
+    AsyncUDP::close() только разрывает связь с удалённым адресом, а привязку
+    и обработчик снимает лишь деструктор (udp_recv(NULL) + udp_remove).
+    С одним объектом «остановленный» сервер продолжал бы отвечать.
+    */
+    AsyncUDP *_udp;
     bool _running;
     bool _drop;
     bool _time_set;
