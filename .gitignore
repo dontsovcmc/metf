@@ -17,3 +17,5 @@ secrets.ini
 # build artifacts
 *.bin
 *.elf
+__pycache__/
+*.pyc
