@@ -1,401 +1,82 @@
 # ESPTestFramework
-Test your hardware by ESP using HTTP requests.
 
-I need to test AVR board firmware. I connect ESP8266 to AVR, run web server and coding Python test scripts.
+Firmware that turns an ESP8266 or ESP32-C6 board into a test bench controlled over HTTP. Wire the board to the device you are testing, and your test scripts, in Python or anything else that speaks HTTP, can:
 
-### Equipment
-- ESP board. It will be a HTTP web server controlled by PC
-- Python or another HTTP request stuff to write a tests
+- drive and read its pins, including precisely timed button presses;
+- talk to it over I2C;
+- record its serial log and read it back;
+- give it the time over NTP, with no internet needed (ESP32 only).
 
-Default board: NodeMCU.
-Change platformio.ini file to use another WeMos or etc.
+Supported boards: ESP32-C6 SuperMini (default build) and NodeMCU (ESP8266).
 
-## 3 Steps
-
-1. Upload ESPTestFramework firmware to NodeMCU (add you WiFi ssid&pwd)
-2. Connect you device to NodeMCU, turn on NodeMCU. Web server runs.
-3. Write Python test script and run it.
-
-## Flashing the board
-
-### WiFi credentials
-
-The board joins one WiFi network and serves HTTP on it. The network is chosen at
-**build time**, not at run time: `SSID_NAME` and `SSID_PASS` are compiled in from
-`secrets.ini`, which is git-ignored and never committed.
+## Quick start
 
 ```bash
-cp secrets.ini.template secrets.ini    # fill in wifi_ssid / wifi_password
-```
-
-`platformio.ini` passes them on as build flags:
-
-```
--D SSID_NAME=${secrets.wifi_ssid}
--D SSID_PASS=${secrets.wifi_password}
-```
-
-Reflashing with different credentials moves the board to a different network and
-a different address, and a test harness that addresses it by IP loses it without
-any error - it just stops answering. Check `secrets.ini` before every upload:
-the credentials in the file are the ones that end up on the board, not the ones
-that are on it now.
-
-### Upload
-
-```bash
-ls /dev/cu.*                                   # find the port, do not hardcode it
+cp secrets.ini.template secrets.ini          # WiFi the board will join
 pio run -e esp32-c6-super-mini -t upload --upload-port /dev/cu.usbmodemXXXX
+pio device monitor --port /dev/cu.usbmodemXXXX   # the board prints its IP at boot
+curl http://<ip>/version
 ```
 
-The ESP32-C6 SuperMini shows up as a native USB CDC port (`usbmodem*`); a board
-behind a USB-UART bridge shows up as `usbserial-*`. `upload_port` in
-`platformio.ini` is a default and goes stale whenever the board is replugged -
-pass `--upload-port` instead of editing the file.
+The WiFi network is compiled into the firmware, so check `secrets.ini` before each upload. Details: [docs/build.md](docs/build.md).
 
-### Finding the board on the network
+## URLs
 
-The framework prints its address to the USB serial console at boot (115200):
+Full reference with every parameter and response: [docs/api.md](docs/api.md).
 
-```
-METF version: 5
-Welcome to ESP Test Framework. Have a nice tests!
-Connect to wi-fi ssid: <the one compiled in>
-IP Address: 192.168.x.x
-```
-
-The SSID line is the one to read after an upload: the network is compiled in, so
-this is the only place the board says which one it went for. An address outside
-the range your harness expects means the credentials in `secrets.ini` were not
-the ones you thought.
-
-```bash
-pio device monitor -e esp32-c6-super-mini --port /dev/cu.usbmodemXXXX
-curl http://<ip>/version        # answers with the protocol version
-```
-
-The address comes from DHCP, so pin it on the router if the harness addresses
-the board by IP.
-
-## Actions
-
-### ping
-Check link
-```
-api.ping()
-```
-What ESP do: 
-Return: 'pong'
-
-## DIO
-
-### pinMode
-Set pin mode as you usually do on C.
-```
-api.pinMode(pin, mode) 
-```
-What ESP do: 
-```pinMode(pin, mode)```
-Return: 'OK'
-
-### digitalRead
-Read DIO pin
-```
-api.digitalRead(pin) 
-```
-What ESP do: 
-```digitalRead(pin)```
-Return: 1 or 0 
-
-### digitalWrite
-Write value to DIO pin
-```
-api.digitalWrite(pin, value) 
-```
-What ESP do: 
-```digitalWrite(pin, value)```
-Return: 'OK'
-
-### pulse
-Drive a pin to `value` for `duration_ms` milliseconds, then release it to high-Z (INPUT).
-Handy for simulating a precise button press — the timing happens on the ESP itself.
-```
-api.pulse(pin, value, duration_ms)
-```
-What ESP do:
-```
-pinMode(pin, OUTPUT)
-digitalWrite(pin, value)
-delay(duration_ms)
-pinMode(pin, INPUT)   # release line to high-Z
-```
-Return: 'OK'
-
-## i2c communication
-
-### Start
-```
-api.i2c_begin() 
-```
-What ESP do: 
-```Wire.begin(SDA, SCL)```
-Return: 'OK'
-
-or set your pins
-```
-api.i2c_begin(sda_pin, scl_pin) 
-```
-```Wire.begin(sda_pin, scl_pin)```
-
-### Set clock speed
-```
-api.i2c_setClock(value) 
-```
-What ESP do: 
-```Wire.setClock(value)```
-Return: 'OK'
-
-### Set stretch limit
-```
-api.i2c_setClockStretchLimit(stretch) 
-```
-What ESP do: 
-```Wire.setClockStretchLimit(stretch)```
-Return: 'OK'
-
-### Send & receive message
-
-slave_address - address of i2c slave device
-message - string
-response_length - home many bytes will read after send
-
-```
-ret = api.i2c_ask(slave_address, message, response_length) 
-```
-
-What ESP do: 
-```
-
-Wire.beginTransmission(slave_address)
-
-LOOP
-	Wire.write(arr[i])
-
-Wire.endTransmission()
-
-LOOP 
-	Wire.requestFrom(address, 1)
-	Wire.read()
-```
-Return: 
-code 200: response
-code 500: error message
-
-
-## Serial log
-
-The board mirrors the DUT serial output into a ring buffer and hands it out on
-request.
-
-### read
-
-```
-text = api.serial_read()          # GET /read
-```
-
-Returns everything accumulated since the last read and empties the buffer.
-Lines longer than `ASB_MAX_LINE_LEN` are split into several buffer lines, so the
-caller has to glue them back together.
-
-### read/stat
-
-```
-GET /read/stat
-{"lines":12,"dropped":0,"baud":115200,"capacity":511,"line_len":128,"bytes":65536}
-```
-
-| field | meaning |
-|---|---|
-| `lines` | lines waiting to be read |
-| `dropped` | lines evicted since the last flush because the ring was full |
-| `baud` | current speed of the DUT serial port |
-| `capacity` | how many lines the ring holds |
-| `line_len` | characters per line, including the terminator |
-| `bytes` | total size of the ring |
-
-**`dropped > 0` means the log has a hole in it.** Eviction is silent - a test
-reading the log after that sees a shorter log, not an error, and goes green for
-the wrong reason. Check the counter before trusting the log, and give the buffer
-more room (see below) or read more often.
-
-### Buffer size
-
-Set by build flags; the size is one number, the geometry is derived from it:
-
-- `-DASB_BUFFER_BYTES=65536` - bytes given to the log (default 6000)
-- `-DASB_MAX_LINE_LEN=128` - characters per line (default 60)
-- `-DASB_MAX_LINES=...` - number of lines, if you would rather set it directly
-
-Defaults are sized for the ESP8266. On ESP32 there is far more RAM: the
-ESP32-C6 has 512 KB of SRAM, and the `esp32-c6-super-mini` environment gives the
-log 64 KB - 511 lines of 128 characters, enough for a full device session.
-
-### ESP Firmware
-
-Based on https://github.com/me-no-dev/ESPAsyncWebServer
-
-## RGB LED Control
-
-### Initialize RGB Strip
-```
-api.rgb_begin(pin, number)
-```
-What ESP do:
-```cpp
-FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>(leds, number)
-```
-Parameters:
-- `pin`: GPIO pin number (currently ignored, see note below)
-- `number`: Number of LEDs (1-10)
-
-**Note:** Due to FastLED library limitations, the pin is fixed at compile time to `RGB_DEFAULT_PIN` (default: GPIO 8). To use a different pin, modify `RGB_DEFAULT_PIN` in `main.cpp` and recompile.
-
-Return: 'OK'
-
-### Set Brightness
-```
-api.rgb_brightness(value)
-```
-What ESP do:
-```cpp
-FastLED.setBrightness(value)
-FastLED.show()
-```
-Parameters:
-- `value`: Brightness level (0-255)
-
-Return: 'OK'
-
-### Set Color
-```
-api.rgb_color(hex_color)
-```
-What ESP do:
-```cpp
-// Set all LEDs to specified color
-for (i = 0; i < num_leds; i++) {
-    leds[i] = CRGB(r, g, b)
-}
-FastLED.show()
-```
-Parameters:
-- `hex_color`: RGB color in hex format (e.g., "FF0000" for red, "00FF00" for green)
-
-Return: 'OK'
-
-### Example
-```python
-from ESPTestFramework import ESPTestFramework
-
-api = ESPTestFramework(host)
-
-# Initialize 1 LED (uses GPIO 8 by default)
-api.rgb_begin(pin=8, number=1)
-
-# Set to red at full brightness
-api.rgb_color("FF0000")
-
-# Dim to 50%
-api.rgb_brightness(128)
-
-# Change to green
-api.rgb_color("00FF00")
-
-# Turn off (brightness 0)
-api.rgb_brightness(0)
-```
+| URL | Method | Purpose |
+|---|---|---|
+| [`/ping`](docs/api.md#get-ping) | GET | connectivity check, answers `pong` |
+| [`/version`](docs/api.md#get-version) | GET | protocol version |
+| [`/pinMode`](docs/api.md#post-pinmode) | POST | set pin mode |
+| [`/digitalRead`](docs/api.md#get-digitalread) | GET | read a pin |
+| [`/digitalWrite`](docs/api.md#post-digitalwrite) | POST | write a pin |
+| [`/pulse`](docs/api.md#post-pulse) | POST | drive a pin for N ms, then release it |
+| [`/i2c`](docs/api.md#post-i2c) | POST | I2C: `begin`, `setClock`, `setClockStretchLimit`, `ask`, `flush` |
+| [`/serial`](docs/api.md#post-serial) | POST | DUT UART speed, clear the log |
+| [`/read`](docs/api.md#get-read) | GET | take the recorded serial log |
+| [`/read/stat`](docs/api.md#get-readstat) | GET | log buffer state, including lost lines |
+| [`/ntp`](docs/api.md#post-ntp) | POST | NTP server: `start`, `time`, `stop`, `drop` (ESP32) |
+| [`/ntp/stat`](docs/api.md#get-ntpstat) | GET | NTP server state and counters (ESP32) |
+| [`/rgb`](docs/api.md#post-rgb) | POST | onboard WS2812B LED: `begin`, `brightness`, `color` (ESP32) |
 
 ## Examples
 
-## Blynk
+```bash
+BOARD=192.168.1.50
 
-Blynk NodeMCU onboard LED
-```
-from ESPTestFramework import ESPTestFramework, LOW, HIGH, INPUT, OUTPUT
+# Is the board up, and which protocol does it speak?
+curl http://$BOARD/version
 
-api = ESPTestFramework(host)
+# Press a button wired to GPIO 5: pull it low for 200 ms, then release
+curl -d pin=5 -d value=0 -d duration_ms=200 http://$BOARD/pulse
 
-pin = LED_BUILTIN_AUX
+# Read a pin
+curl "http://$BOARD/digitalRead?pin=4"
 
-api.pinMode(pin, OUTPUT)
-api.digitalWrite(pin, LOW)
+# I2C: send one byte 0x41 to slave 18 and read 3 bytes back
+curl -d action=begin http://$BOARD/i2c
+curl -d action=ask -d address=18 -d hexstring=41 -d response=3 http://$BOARD/i2c
 
-assert api.digitalRead(pin) == LOW
+# Serial log: listen at 9600 from a clean buffer, run the test, then collect
+curl -d baudrate=9600 -d flush=1 http://$BOARD/serial
+curl http://$BOARD/read/stat          # "dropped" must be 0, or the log has a hole
+curl http://$BOARD/read
 
-api.delay(1000)
-api.digitalWrite(pin, HIGH)
-
-assert api.digitalRead(pin) == HIGH
-```
-
-## Check button pressed
-```
-api = ESPTestFramework(host)
-
-api.pinMode(D5, INPUT_PULLUP)
-assert api.wait_digital(D5, LOW, 3.0), "Button wasn't pressed"
+# Give the device 2026-01-01 00:00:00 UTC over NTP, check it asked
+curl -d action=start -d epoch=1767225600 http://$BOARD/ntp
+curl http://$BOARD/ntp/stat
 ```
 
-## Check button pressed
-```
-api = ESPTestFramework(host)
+`test/board/conftest.py` has a minimal Python client (`Board.get`, `Board.post`) that uses only the standard library.
 
-api.pinMode(D5, INPUT_PULLUP)
-assert api.wait_digital(D5, LOW, 3.0), "Button wasn't pressed"
-```
+## Documentation
 
-## i2c communication
-```
-from ESPTestFramework import ESPTestFramework
+- [docs/api.md](docs/api.md) - every URL, its parameters and responses
+- [docs/build.md](docs/build.md) - building, flashing, WiFi, build flags
+- [docs/testing.md](docs/testing.md) - host tests, on-board tests, live-board pytest suite
+- [docs/architecture.md](docs/architecture.md) - how the firmware works inside
 
-api = ESPTestFramework(host)
+## License
 
-api.i2c_begin(D3, D4)   #  call Wire.begin(D3, D4)
-
-message = 'M'           #  send 1 byte '4D'
-answer_len = 1          #  read 1 byte in the answer
-
-ret = api.i2c_ask(address, message, answer_len)
-
-assert ord(ret[0]) == 1, 'response not 1'
-```
-
-## Unpack binary structures
-
-```
-from ESPTestFramework import ESPTestFramework
-from ESPTestFramework.utils import DataStruct
-
-api = ESPTestFramework(host)
-
-api.i2c_begin(D3, D4)
-
-fields = [  ('version',      'B'),  # unsigned char
-            ('value_uint16', 'H'),  # unsigned short
-            ('value_uint32', 'L'),  # unsigned long
-        ]
-
-header_len = DataStruct.calcsize(fields)
-
-ret = api.i2c_ask(12, 'A', header_len)
-
-header = DataStruct(fields, ret)
-
-print header.version
-print header.value_uint16
-print header.value_uint32
-```
-
-## ToDo
-
-1. AVR ISP programmer by ESP to upload firmwares
+[MIT](LICENSE)
