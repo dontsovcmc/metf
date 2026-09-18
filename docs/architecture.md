@@ -4,6 +4,21 @@ METF is an HTTP-controlled test bench: the ESP board is wired to a device under 
 
 Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP and RGB are ESP32-only.
 
+## WiFi: modem sleep is off
+
+`setup()` calls `WiFi.setSleep(false)` right after the board joins. By default a
+station dozes between the AP's beacons, so every reply waits for the next DTIM:
+ping to the board swings from 6 ms to 260 ms, and every HTTP call a harness makes
+pays that toll. Under a test bench that deliberately churns the air - turning its
+own access point off and on, changing its channel, raising the DUT's own AP - a
+dozing station also drops off the network and does not always come back quickly.
+A harness then sees connect timeouts and `host is down` where the board is in
+fact powered and fine.
+
+Responsiveness is worth more here than current: METF is mains-powered, never a
+battery. The ESP8266 core provides the same `setSleep(bool)` name for ESP32
+compatibility, so one call covers both platforms.
+
 ## Two serial ports on ESP32-C6
 
 `main.cpp` defines `METF_SERIAL`, the port the DUT is read from:
