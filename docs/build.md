@@ -16,6 +16,29 @@ there goes stale as soon as the board is replugged. `ls /dev/cu.*` finds it: the
 ESP32-C6 SuperMini is a native USB CDC port (`usbmodem*`), a board behind a
 USB-UART bridge is `usbserial-*`.
 
+## When a build suddenly cannot find a library header
+
+`ESPAsyncTCP.h: No such file or directory` (or the same for any other
+dependency) is almost never a missing declaration. `lib_deps` names the library
+directly used; its own dependencies come from the library's `library.json` -
+`ESP Async WebServer` declares `ESPAsyncTCP` for `espressif8266` and `AsyncTCP`
+for `espressif32`, and PlatformIO installs them by itself.
+
+What it really means is that `.pio/libdeps/<env>/` is half-installed: an install
+interrupted once (a dropped download, a failed `package-postinstall.py`) leaves
+the directly named library in place and the transitive one missing, and every
+later build reuses that state instead of repairing it. Wipe the directory and
+build again:
+
+```bash
+rm -rf .pio/libdeps/nodemcuv2
+pio run -e nodemcuv2
+```
+
+Adding the missing dependency to `lib_deps` also makes the error go away, and
+that is the trap: it hides a broken local directory behind a redundant line in
+the config, where it survives into the repository and outlives the cause.
+
 ## Environments
 
 - **ESP8266** (`nodemcuv2`): `espressif8266@4.2.1`, `ESPAsyncTCP`, ESP Async WebServer 1.2.3.
