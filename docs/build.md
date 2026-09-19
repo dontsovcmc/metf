@@ -11,10 +11,44 @@ pio run -e esp32-c6-super-mini -t upload --upload-port /dev/cu.usbmodemXXXX
 pio device monitor -e esp32-c6-super-mini --port /dev/cu.usbmodemXXXX
 ```
 
-The upload port belongs on the command line, not in `platformio.ini` - the value
-there goes stale as soon as the board is replugged. `ls /dev/cu.*` finds it: the
-ESP32-C6 SuperMini is a native USB CDC port (`usbmodem*`), a board behind a
-USB-UART bridge is `usbserial-*`.
+## Which port is which board
+
+A `/dev/cu.*` name belongs to the USB socket, not to the board: replug the cable
+and the same name lands on the neighbour. That is why no port is written into
+`platformio.ini`.
+
+Leaving the choice to PlatformIO is worse than it looks. With no `upload_port`
+it takes the first port whose VID:PID is known to any installed platform
+([`finder.py`](https://github.com/platformio/platformio-core/blob/v6.2.0/platformio/device/finder.py#L217),
+`_find_known_device`) - on a bench with several boards attached that is whichever
+one the OS happened to enumerate first, and the upload goes there silently.
+
+What does identify a board is its USB serial number: on an ESP32 it is the MAC -
+the same one the board prints at boot - and on a USB-UART bridge a string from
+its EEPROM. `pio device list` shows it as `SER=`:
+
+```
+/dev/cu.usbmodem2101  SER=REDACTED  USB JTAG/serial debug unit
+```
+
+Name the board once in `secrets.ini` (git-ignored, one file per machine) and
+`pio run -t upload` finds its port by itself, whatever the socket:
+
+```ini
+[board_serial]
+esp32-c6-super-mini = REDACTED
+nodemcuv2 = 0001
+```
+
+`--upload-port` still wins over everything, and `METF_BOARD_SERIAL` overrides the
+file for one command. Without a binding, a single attached board is uploaded as
+before, while several stop the build with the port list instead of guessing:
+[`scripts/pick_port.py`](../scripts/pick_port.py).
+
+`pio device monitor` does not run project scripts
+([`command.py`](https://github.com/platformio/platformio-core/blob/v6.2.0/platformio/device/monitor/command.py#L127)),
+so it still needs `--port`. Picking the wrong one there only opens a console on
+another board - and resets it, since opening the port toggles DTR/RTS.
 
 ## When a build suddenly cannot find a library header
 
