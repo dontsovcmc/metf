@@ -14,7 +14,8 @@ Errors:
 | 400 | `parameter '<name>' not found` | a required GET parameter is missing |
 | 400 | `parameter '<name>' is incorrect` | the value or `action` is not accepted |
 | 404 | `Not found` | unknown URL or wrong method |
-| 409 | `pulse in progress` | `/pulse` while another pulse is still running |
+| 409 | `pulse in progress` | `/pulse` on a pin whose own pulse is still running |
+| 503 | `no free pulse timer` | `/pulse` with all 8 pulse slots busy |
 | 500 | a description | hardware failure: I2C error, UDP port busy, RGB not initialised |
 
 Contents: [Service](#service) · [GPIO](#gpio) · [I2C](#i2c) · [Serial log](#serial-log) · [NTP server](#ntp-server) · [RGB LED](#rgb-led)
@@ -75,7 +76,9 @@ The board sets the pin to `OUTPUT`, writes `value`, arms a timer for `duration_m
 
 The answer is a receipt, not a finish line. Protocol 7 made it the finish line - the answer was held back until the timer fired - and that turned out to be a bad clock: a deferred answer is not sent when it is ready but on the connection's next poll, and AsyncTCP polls about twice a second. Measured on the board, 20 ms pulse, 20 samples: the answer arrived 240-336 ms after the line was already released. A bench that spaces impulses from the moment the call returns silently got a quarter-second added to every gap. Protocol 8 hands the clock back to the client, where it is exact.
 
-Two pulses cannot overlap, because the pin is driven by one at a time: a second `/pulse` that arrives while the first is still running is refused with `409 pulse in progress`. That refusal is also how a client can ask whether the line is still busy without touching it.
+Two pulses cannot overlap **on the same pin**: a second `/pulse` for a pin whose pulse is still running is refused with `409 pulse in progress`. That refusal is also how a client can ask whether a line is still busy without touching it.
+
+Different pins run at the same time - the board keeps 8 pulse slots, one timer each - because that is what a bench does: press the button while a train of impulses runs into the counter input. Protocol 7 had a single flag for the whole board and refused such a press; with all 8 slots busy the answer is `503 no free pulse timer`.
 
 ## I2C
 

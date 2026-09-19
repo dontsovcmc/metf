@@ -38,13 +38,34 @@ AsyncSerialBuffer asb;
 // работает в задаче async_tcp, которая обслуживает все соединения платы, и
 // delay() в ней останавливает их все разом (README библиотеки: «You can not
 // use yield or delay or any function that uses them inside the callbacks»).
-Ticker pulse_timer;
-static volatile bool pulse_busy = false;
-static uint8_t pulse_pin = 0;
+// Импульсы идут по нескольким выводам разом: стенд жмёт кнопку, пока по входу
+// счётчика идёт серия. Занятым бывает вывод, а не плата, поэтому слотов
+// несколько - по одному таймеру на каждый. Восемь с запасом: стенду хватает
+// четырёх (кнопка, сброс, два входа).
+#define PULSE_SLOTS 8
 
-static void pulse_end() {
-    pinMode(pulse_pin, INPUT);     // отпускаем линию в high-Z
-    pulse_busy = false;
+static Ticker pulse_timer[PULSE_SLOTS];
+static volatile bool pulse_busy[PULSE_SLOTS] = { false };
+static uint8_t pulse_pin[PULSE_SLOTS] = { 0 };
+
+static void pulse_end(uint32_t slot) {
+    pinMode(pulse_pin[slot], INPUT);   // отпускаем линию в high-Z
+    pulse_busy[slot] = false;
+}
+
+// Слот, которым сейчас занят этот вывод, или -1
+static int pulse_slot_of(uint8_t pin) {
+    for (int i = 0; i < PULSE_SLOTS; i++)
+        if (pulse_busy[i] && pulse_pin[i] == pin)
+            return i;
+    return -1;
+}
+
+static int pulse_slot_free() {
+    for (int i = 0; i < PULSE_SLOTS; i++)
+        if (!pulse_busy[i])
+            return i;
+    return -1;
 }
 
 // Плата, потерявшая сеть, снаружи неотличима от зависшей: она молчит. Разрыв
@@ -386,19 +407,30 @@ void setup() {
         uint8_t value = request->getParam(PARAM_VALUE, true)->value().toInt();
         uint32_t ms   = request->getParam(PARAM_DURATION_MS, true)->value().toInt();
 
-        if (pulse_busy) {
+        // Отказ - про вывод, а не про плату: по соседнему выводу импульс идти
+        // может и должен
+        if (pulse_slot_of(pin) >= 0) {
             request->send(409, "text/plain", "pulse in progress");
             return;
         }
 
-        pulse_pin = pin;
-        pulse_busy = true;
+        int slot = pulse_slot_free();
+        if (slot < 0) {
+            request->send(503, "text/plain", "no free pulse timer");
+            return;
+        }
+
+        pulse_pin[slot] = pin;
+        pulse_busy[slot] = true;
         pinMode(pin, OUTPUT);
         digitalWrite(pin, value);
 #ifdef ESP8266
-        pulse_timer.once_ms_scheduled(ms, pulse_end);   // не SYS-контекст, а loop()
+        // не SYS-контекст, а loop(); лямбда со слотом подходит, потому что
+        // здешний Ticker берёт std::function
+        pulse_timer[slot].once_ms_scheduled(ms, [slot]() { pulse_end((uint32_t)slot); });
 #else
-        pulse_timer.once_ms(ms, pulse_end);
+        // здешний Ticker берёт только указатель на функцию, зато с аргументом
+        pulse_timer[slot].once_ms<uint32_t>(ms, pulse_end, (uint32_t)slot);
 #endif
 
         // Отвечаем сразу: импульс принят, идёт, длится столько-то. Ждать конца
