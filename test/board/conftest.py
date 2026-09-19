@@ -5,7 +5,7 @@
 стенда, пытались бы дозвониться неизвестно куда и падали бы по таймауту вместо
 внятного пропуска.
 
-    pytest test/board --metf-host 192.168.51.14 -v
+    pytest test/board --metf-host 192.168.1.50 -v
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ HTTP_TIMEOUT = 5.0
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--metf-host', default=None,
-                     help='адрес платы METF, например 192.168.51.14')
+                     help='адрес платы METF, например 192.168.1.50')
 
 
 @pytest.fixture(scope='session')
