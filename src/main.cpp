@@ -47,6 +47,69 @@ static void pulse_end() {
     pulse_busy = false;
 }
 
+// Плата, потерявшая сеть, снаружи неотличима от зависшей: она молчит. Разрыв
+// печатаем сразу, а повторы - раз в минуту: ядро пробует снова каждые 2-3
+// секунды и не прекращает никогда, и без прореживания консоль забьётся.
+#define WIFI_REPORT_PERIOD_MS 60000
+
+// Ждём подключения на старте только ради строки с адресом в консоли: сервер
+// поднимается в любом случае, а дальше подключается ядро. Дефолтные 60 с - это
+// минута без HTTP на плате с неверным паролем (ядро столько молчит о неудаче).
+#define WIFI_CONNECT_WAIT_MS 15000
+
+static bool wifi_down = false;
+static uint32_t wifi_down_since = 0;
+static uint32_t wifi_last_report = 0;
+static uint32_t wifi_attempts = 0;
+
+static void wifi_note_down(int reason, const char *name = nullptr) {
+    uint32_t now = millis();
+    wifi_attempts++;
+    if (!wifi_down) {
+        wifi_down = true;
+        wifi_down_since = now;
+        wifi_last_report = now;
+        LOG_ERROR("wifi: disconnected, reason " << reason << " " << (name ? name : ""));
+    } else if (now - wifi_last_report >= WIFI_REPORT_PERIOD_MS) {
+        wifi_last_report = now;
+        LOG_ERROR("wifi: offline " << (now - wifi_down_since) / 1000 << " s, "
+                  << wifi_attempts << " attempts, last reason " << reason);
+    }
+}
+
+static void wifi_note_up() {
+    if (wifi_down) {
+        LOG_INFO("wifi: back after " << (millis() - wifi_down_since) / 1000
+                 << " s and " << wifi_attempts << " attempts, ip " << WiFi.localIP());
+    }
+    wifi_down = false;
+    wifi_attempts = 0;
+}
+
+#ifdef ESP8266
+// Подписка жива, пока жив возвращённый объект
+static WiFiEventHandler wifi_on_lost;
+static WiFiEventHandler wifi_on_got_ip;
+#endif
+
+static void wifi_watch() {
+#ifdef ESP32
+    WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) {
+        if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            wifi_err_reason_t reason = (wifi_err_reason_t)info.wifi_sta_disconnected.reason;
+            wifi_note_down(reason, WiFi.disconnectReasonName(reason));
+        } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            wifi_note_up();
+        }
+    });
+#elif defined(ESP8266)
+    wifi_on_lost = WiFi.onStationModeDisconnected(
+        [](const WiFiEventStationModeDisconnected &event) { wifi_note_down(event.reason); });
+    wifi_on_got_ip = WiFi.onStationModeGotIP(
+        [](const WiFiEventStationModeGotIP &) { wifi_note_up(); });
+#endif
+}
+
 #ifdef ESP32
 NtpServer ntp;
 #endif
@@ -204,15 +267,16 @@ void setup() {
     // больше негде, а заливка с другими кредами уводит её со стенда молча
     LOG_INFO("Connect to wi-fi ssid: " << VALUE(SSID_NAME));
 
+    wifi_watch();
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();          // начинаем с известного состояния, а не с того,
     delay(300);                 // что осталось от прошлой прошивки
     WiFi.begin(VALUE(SSID_NAME), VALUE(SSID_PASS));
-    if (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    if (WiFi.waitForConnectResult(WIFI_CONNECT_WAIT_MS) != WL_CONNECTED) {
         // Дальше setup() идёт до конца: переподключение - дело ядра
         // (WiFiSTA::_autoReconnect), а сервер, не поднятый на старте, не
         // поднимется уже никогда, и плата останется доступной только ресетом
-        LOG_ERROR("WiFi Failed! Starting the server anyway");
+        LOG_ERROR("WiFi not connected: starting the server, the core keeps trying");
     }
 
     // Модем-сон выключен намеренно. По умолчанию станция дремлет между маяками

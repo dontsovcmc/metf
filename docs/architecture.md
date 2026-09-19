@@ -31,6 +31,37 @@ answers pings - while the HTTP server, never started, is gone until someone
 presses reset. One power cut that brings up the board before the access point is
 enough to produce it, and nothing about the board looks broken afterwards.
 
+The wait itself is `WIFI_CONNECT_WAIT_MS` (15 s), not the 60 s default, and it
+buys only the address line in the console. The default costs a full minute of no
+HTTP at all on a board flashed with a wrong password: measured on an ESP32-C6,
+`waitForConnectResult()` returns in 2.9 s when the network is simply not there
+(`NO_AP_FOUND`) and sits out all 60 s when the password is wrong - the core
+reports `4WAY_HANDSHAKE_TIMEOUT` and keeps retrying without ever concluding.
+
+## What the board says about the network
+
+`wifi_watch()` subscribes to the station events before the first `WiFi.begin()`,
+so every loss of the network reaches the console: `wifi: disconnected, reason
+201 NO_AP_FOUND` at the moment it happens, then one line a minute
+(`WIFI_REPORT_PERIOD_MS`) with how long it has been offline and how many attempts
+that took, and `wifi: back after N s and M attempts, ip ...` when it returns.
+
+Without it the board is mute, and a METF that has lost the network looks exactly
+like a METF that has hung: no answer on HTTP, nothing in the console. The
+throttling is not cosmetic - the core retries every 2.4 s while the access point
+is missing and every 3.1 s while the password is wrong (both measured over
+2.5 minutes), so one line per event would bury the console in a night.
+
+Forever is the right answer here, unlike on the harness's own AT board: METF must
+rejoin the router that will come back, while that board was hunting an access
+point the harness had switched off on purpose.
+
+ESP32 has `WiFi.onEvent`; ESP8266 has `onStationModeDisconnected` /
+`onStationModeGotIP`, whose subscriptions live only as long as the returned
+`WiFiEventHandler`, hence the globals. The reason name (`NO_AP_FOUND`) comes from
+`WiFi.disconnectReasonName()` and exists on ESP32 only; the number is printed on
+both.
+
 ## Two serial ports on ESP32-C6
 
 `main.cpp` defines `METF_SERIAL`, the port the DUT is read from:

@@ -53,7 +53,7 @@ Copy `secrets.ini.template` to `secrets.ini` (git-ignored) and fill in `wifi_ssi
 
 At boot the board prints to the USB console at 115200: protocol version, the SSID it is joining, and the IP, MAC, gateway and mask it got. The SSID line is the only place the compiled-in network is visible; the MAC is there so the address can be pinned on the router (an SSID shared by two access points puts the board on whichever answers first).
 
-If WiFi fails, `setup()` returns before any route is registered - the board is up but serves nothing, and only the console says `WiFi Failed!`. `curl http://<ip>/version` confirms the board is serving.
+If WiFi fails, the board says `WiFi not connected: starting the server, the core keeps trying` and carries on: every route is registered and the server is listening, it just has no address yet. The console then carries the network state on its own - `wifi: disconnected, reason 201 NO_AP_FOUND` when it drops, one summary line a minute while it stays down, `wifi: back after N s and M attempts, ip ...` when it returns. `curl http://<ip>/version` confirms the board is serving.
 
 ## Build flags and protocol version
 
