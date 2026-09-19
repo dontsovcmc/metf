@@ -18,7 +18,7 @@ pio device monitor --port /dev/cu.usbmodemXXXX   # the board prints its IP at bo
 curl http://<ip>/version
 ```
 
-The WiFi network is compiled into the firmware, so check `secrets.ini` before each upload. Details: [docs/build.md](docs/build.md).
+The WiFi network is compiled into the firmware, so check `secrets.ini` before each upload. Details: [docs/build.md](docs/build.md). How the board behaves when that network is missing, and what it says about it: [docs/wifi.md](docs/wifi.md).
 
 ## URLs
 
