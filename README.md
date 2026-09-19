@@ -18,7 +18,7 @@ pio device monitor --port /dev/cu.usbmodemXXXX   # the board prints its IP at bo
 curl http://<ip>/version
 ```
 
-The WiFi network is compiled into the firmware, so check `secrets.ini` before each upload. Details: [docs/build.md](docs/build.md).
+The WiFi network is compiled into the firmware, so check `secrets.ini` before each upload. Details: [docs/build.md](docs/build.md). How the board behaves when that network is missing, and what it says about it: [docs/wifi.md](docs/wifi.md).
 
 ## URLs
 
@@ -31,7 +31,7 @@ Full reference with every parameter and response: [docs/api.md](docs/api.md).
 | [`/pinMode`](docs/api.md#post-pinmode) | POST | set pin mode |
 | [`/digitalRead`](docs/api.md#get-digitalread) | GET | read a pin |
 | [`/digitalWrite`](docs/api.md#post-digitalwrite) | POST | write a pin |
-| [`/pulse`](docs/api.md#post-pulse) | POST | drive a pin for N ms, then release it |
+| [`/pulse`](docs/api.md#post-pulse) | POST | drive a pin for N ms, then release it; other routes keep answering meanwhile |
 | [`/i2c`](docs/api.md#post-i2c) | POST | I2C: `begin`, `setClock`, `setClockStretchLimit`, `ask`, `flush` |
 | [`/serial`](docs/api.md#post-serial) | POST | DUT UART speed, clear the log |
 | [`/read`](docs/api.md#get-read) | GET | take the recorded serial log |

@@ -6,6 +6,9 @@ Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP and RGB are E
 
 ## WiFi: modem sleep is off
 
+The principles behind the whole network part, the ESP behaviour they account
+for, the measurements and the known gaps: [wifi.md](wifi.md).
+
 `setup()` calls `WiFi.setSleep(false)` right after the board joins. By default a
 station dozes between the AP's beacons, so every reply waits for the next DTIM:
 ping to the board swings from 6 ms to 260 ms, and every HTTP call a harness makes
@@ -18,6 +21,49 @@ fact powered and fine.
 Responsiveness is worth more here than current: METF is mains-powered, never a
 battery. The ESP8266 core provides the same `setSleep(bool)` name for ESP32
 compatibility, so one call covers both platforms.
+
+## The server starts even when WiFi does not
+
+A failed `WiFi.waitForConnectResult()` is logged and nothing more: `setup()` runs
+to the end and `server.begin()` is always reached. Giving up there instead - the
+early `return` this firmware used to have - leaves the board in the worst state
+it can be in. The core keeps reconnecting on its own (`STAClass::_autoReconnect` is true by
+default - `STA.cpp:231` of Arduino core 3.2.0 - and `NO_AP_FOUND` and
+`BEACON_TIMEOUT` are both on its list of reasons worth retrying, `STA.cpp:58`), so the board joins the network a minute later and
+answers pings - while the HTTP server, never started, is gone until someone
+presses reset. One power cut that brings up the board before the access point is
+enough to produce it, and nothing about the board looks broken afterwards.
+
+The wait itself is `WIFI_CONNECT_WAIT_MS` (15 s), not the 60 s default, and it
+buys only the address line in the console. The default costs a full minute of no
+HTTP at all on a board flashed with a wrong password: measured on an ESP32-C6,
+`waitForConnectResult()` returns in 2.9 s when the network is simply not there
+(`NO_AP_FOUND`) and sits out all 60 s when the password is wrong - the core
+reports `4WAY_HANDSHAKE_TIMEOUT` and keeps retrying without ever concluding.
+
+## What the board says about the network
+
+`wifi_watch()` subscribes to the station events before the first `WiFi.begin()`,
+so every loss of the network reaches the console: `wifi: disconnected, reason
+201 NO_AP_FOUND` at the moment it happens, then one line a minute
+(`WIFI_REPORT_PERIOD_MS`) with how long it has been offline and how many attempts
+that took, and `wifi: back after N s and M attempts, ip ...` when it returns.
+
+Without it the board is mute, and a METF that has lost the network looks exactly
+like a METF that has hung: no answer on HTTP, nothing in the console. The
+throttling is not cosmetic - the core retries every 2.4 s while the access point
+is missing and every 3.1 s while the password is wrong (both measured over
+2.5 minutes), so one line per event would bury the console in a night.
+
+Forever is the right answer here, unlike on the harness's own AT board: METF must
+rejoin the router that will come back, while that board was hunting an access
+point the harness had switched off on purpose.
+
+ESP32 has `WiFi.onEvent`; ESP8266 has `onStationModeDisconnected` /
+`onStationModeGotIP`, whose subscriptions live only as long as the returned
+`WiFiEventHandler`, hence the globals. The reason name (`NO_AP_FOUND`) comes from
+`WiFi.disconnectReasonName()` and exists on ESP32 only; the number is printed on
+both.
 
 ## Two serial ports on ESP32-C6
 
@@ -36,7 +82,7 @@ On the C6, `setup()` waits 2 s before printing because the USB CDC comes up afte
 |---|---|
 | `GET /ping`, `GET /version` | connectivity; protocol version |
 | `POST /pinMode`, `GET /digitalRead`, `POST /digitalWrite` | GPIO |
-| `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timing done on the ESP |
+| `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timed by the ESP on a `Ticker`, `409` while one is running |
 | `POST /i2c` | `action=begin/setClock/setClockStretchLimit/ask/flush`; `ask` takes `address`, `hexstring`, `response` (bytes to read) and returns hex |
 | `POST /serial` | `baudrate` (allow-listed in `kAllowedBauds`) and `flush=1`. A missing `baudrate` means 115200, so a flush-only call resets the speed |
 | `GET /read`, `GET /read/stat` | drain the serial log; ring state as JSON (`lines`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`) |
@@ -47,6 +93,8 @@ Parameters, responses and errors of every route: [api.md](api.md).
 
 Conventions and traps:
 
+- **Never block in a handler.** The handlers do not run on the loop thread - they run in the task that serves every connection of the board, and the library states it outright: *"You can not use yield or delay or any function that uses them inside the callbacks"*. The cost is not theoretical. A handler asleep for 4 seconds starves every other connection: AsyncTCP drops poll events once its queue passes three quarters (`CONFIG_ASYNC_TCP_QUEUE_SIZE`, 64), a client has 3 seconds to send its request (`setRxTimeout(3)` on accept) and unacknowledged data times out after 5 (`CONFIG_ASYNC_TCP_MAX_ACK_TIME`). That is how `/pulse` used to be written, and a bench that polls `/read` ten times a second saw read timeouts during every 4-second button press, then a board that stopped answering altogether by the end of an hour-long run.
+- **Wait by arming a timer, answer with `RESPONSE_TRY_AGAIN`.** `/pulse` is the worked example: it arms a `Ticker` (in the core of both platforms - no extra library), returns, and answers from a chunked response whose filler says `RESPONSE_TRY_AGAIN` until the timer has fired. The client still gets its answer only when the line is released, and the board stays responsive throughout. On ESP8266 the timer uses `once_ms_scheduled()`, which runs the callback from `loop()` instead of SYS context; ESP32 has no such variant and its `Ticker` already dispatches from the `esp_timer` task.
 - **Register `/x/sub` before `/x`.** `AsyncCallbackWebHandler::canHandle` also matches by prefix (`url.startsWith(_uri + "/")`), so `/read` or `/ntp` declared first would swallow `/read/stat` / `/ntp/stat`.
 - POST parameters are form-encoded in the body: use `hasParam(name, true)` / `getParam(name, true)`. Without the second argument only the query string is searched - that silently broke `/serial` once; it now uses `param_any()` (body, then query).
 - Errors: 400 via `response_400()` for missing/incorrect parameters, 500 for hardware failures (I2C errors, UDP bind failure), 404 for unknown routes.
