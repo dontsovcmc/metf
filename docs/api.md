@@ -4,7 +4,7 @@ Protocol version **7** (`GET /version`). The board serves plain HTTP on port 80.
 
 - POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string.
 - Numbers are decimal: `address=72`, not `0x48`.
-- Commands answer `200 OK` (text/plain) unless noted otherwise.
+- Commands answer `200 OK` (text/plain) unless noted otherwise. `/pulse` answers `202 Accepted`: the work it starts outlives the answer.
 
 Errors:
 
@@ -14,7 +14,8 @@ Errors:
 | 400 | `parameter '<name>' not found` | a required GET parameter is missing |
 | 400 | `parameter '<name>' is incorrect` | the value or `action` is not accepted |
 | 404 | `Not found` | unknown URL or wrong method |
-| 409 | `pulse in progress` | `/pulse` while another pulse is still running |
+| 409 | `pulse in progress` | `/pulse` on a pin whose own pulse is still running |
+| 503 | `no free pulse timer` | `/pulse` with all 8 pulse slots busy |
 | 500 | a description | hardware failure: I2C error, UDP port busy, RGB not initialised |
 
 Contents: [Service](#service) · [GPIO](#gpio) · [I2C](#i2c) · [Serial log](#serial-log) · [NTP server](#ntp-server) · [RGB LED](#rgb-led)
@@ -27,7 +28,7 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `7`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`.
+Answers the protocol version, e.g. `8`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse.
 
 ## GPIO
 
@@ -71,11 +72,13 @@ Drives a pin for a fixed time and releases it - a button press with the timing d
 | `value` | level to drive, `1` or `0` |
 | `duration_ms` | how long to hold it, ms |
 
-The board sets the pin to `OUTPUT`, writes `value`, arms a timer for `duration_ms` and returns to serving requests. When the timer fires, the pin goes back to `INPUT` (high-Z) and only then does the answer `OK` go out.
+The board sets the pin to `OUTPUT`, writes `value`, arms a timer for `duration_ms` and answers **immediately**: `202 Accepted`, body `duration_ms`. When the timer fires, the pin goes back to `INPUT` (high-Z). Nothing is sent at that moment - **the client waits out the pulse on its own clock**, and the board stays responsive throughout: `/read`, `/ping` and everything else keep answering.
 
-So the answer still means "the line is already released" - a client that waits for it needs no timer of its own - but the board is **not** deaf while the pulse runs: `/read`, `/ping` and everything else keep answering. Up to protocol 6 the wait was a `delay()` inside the request handler, which is the one thing ESPAsyncWebServer forbids there: the handler runs in the task that serves every connection of the board, so a 4-second button press blocked all HTTP for 4 seconds.
+The answer is a receipt, not a finish line. Protocol 7 made it the finish line - the answer was held back until the timer fired - and that turned out to be a bad clock: a deferred answer is not sent when it is ready but on the connection's next poll, and AsyncTCP polls about twice a second. Measured on the board, 20 ms pulse, 20 samples: the answer arrived 240-336 ms after the line was already released. A bench that spaces impulses from the moment the call returns silently got a quarter-second added to every gap. Protocol 8 hands the clock back to the client, where it is exact.
 
-The timer is the only one, because the pin is driven by the only one at a time: a second `/pulse` that arrives while the first is still running is refused with `409 pulse in progress`. Keep `duration_ms` shorter than the client's read timeout: the answer is held back until the pulse ends, and it leaves on the connection's next poll, so it can lag the pulse by up to half a second.
+Two pulses cannot overlap **on the same pin**: a second `/pulse` for a pin whose pulse is still running is refused with `409 pulse in progress`. That refusal is also how a client can ask whether a line is still busy without touching it.
+
+Different pins run at the same time - the board keeps 8 pulse slots, one timer each - because that is what a bench does: press the button while a train of impulses runs into the counter input. Protocol 7 had a single flag for the whole board and refused such a press; with all 8 slots busy the answer is `503 no free pulse timer`.
 
 ## I2C
 
