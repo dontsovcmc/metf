@@ -6,6 +6,9 @@ Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP and RGB are E
 
 ## WiFi: modem sleep is off
 
+The principles behind the whole network part, the ESP behaviour they account
+for, the measurements and the known gaps: [wifi.md](wifi.md).
+
 `setup()` calls `WiFi.setSleep(false)` right after the board joins. By default a
 station dozes between the AP's beacons, so every reply waits for the next DTIM:
 ping to the board swings from 6 ms to 260 ms, and every HTTP call a harness makes
@@ -24,9 +27,9 @@ compatibility, so one call covers both platforms.
 A failed `WiFi.waitForConnectResult()` is logged and nothing more: `setup()` runs
 to the end and `server.begin()` is always reached. Giving up there instead - the
 early `return` this firmware used to have - leaves the board in the worst state
-it can be in. The core keeps reconnecting on its own (`WiFiSTA::_autoReconnect`
-is true by default, and `NO_AP_FOUND` and `BEACON_TIMEOUT` are both on its list
-of reasons worth retrying), so the board joins the network a minute later and
+it can be in. The core keeps reconnecting on its own (`STAClass::_autoReconnect` is true by
+default - `STA.cpp:231` of Arduino core 3.2.0 - and `NO_AP_FOUND` and
+`BEACON_TIMEOUT` are both on its list of reasons worth retrying, `STA.cpp:58`), so the board joins the network a minute later and
 answers pings - while the HTTP server, never started, is gone until someone
 presses reset. One power cut that brings up the board before the access point is
 enough to produce it, and nothing about the board looks broken afterwards.
