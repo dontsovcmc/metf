@@ -19,6 +19,18 @@ Responsiveness is worth more here than current: METF is mains-powered, never a
 battery. The ESP8266 core provides the same `setSleep(bool)` name for ESP32
 compatibility, so one call covers both platforms.
 
+## The server starts even when WiFi does not
+
+A failed `WiFi.waitForConnectResult()` is logged and nothing more: `setup()` runs
+to the end and `server.begin()` is always reached. Giving up there instead - the
+early `return` this firmware used to have - leaves the board in the worst state
+it can be in. The core keeps reconnecting on its own (`WiFiSTA::_autoReconnect`
+is true by default, and `NO_AP_FOUND` and `BEACON_TIMEOUT` are both on its list
+of reasons worth retrying), so the board joins the network a minute later and
+answers pings - while the HTTP server, never started, is gone until someone
+presses reset. One power cut that brings up the board before the access point is
+enough to produce it, and nothing about the board looks broken afterwards.
+
 ## Two serial ports on ESP32-C6
 
 `main.cpp` defines `METF_SERIAL`, the port the DUT is read from:
@@ -36,7 +48,7 @@ On the C6, `setup()` waits 2 s before printing because the USB CDC comes up afte
 |---|---|
 | `GET /ping`, `GET /version` | connectivity; protocol version |
 | `POST /pinMode`, `GET /digitalRead`, `POST /digitalWrite` | GPIO |
-| `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timing done on the ESP |
+| `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timed by the ESP on a `Ticker`, `409` while one is running |
 | `POST /i2c` | `action=begin/setClock/setClockStretchLimit/ask/flush`; `ask` takes `address`, `hexstring`, `response` (bytes to read) and returns hex |
 | `POST /serial` | `baudrate` (allow-listed in `kAllowedBauds`) and `flush=1`. A missing `baudrate` means 115200, so a flush-only call resets the speed |
 | `GET /read`, `GET /read/stat` | drain the serial log; ring state as JSON (`lines`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`) |
@@ -47,6 +59,8 @@ Parameters, responses and errors of every route: [api.md](api.md).
 
 Conventions and traps:
 
+- **Never block in a handler.** The handlers do not run on the loop thread - they run in the task that serves every connection of the board, and the library states it outright: *"You can not use yield or delay or any function that uses them inside the callbacks"*. The cost is not theoretical. A handler asleep for 4 seconds starves every other connection: AsyncTCP drops poll events once its queue passes three quarters (`CONFIG_ASYNC_TCP_QUEUE_SIZE`, 64), a client has 3 seconds to send its request (`setRxTimeout(3)` on accept) and unacknowledged data times out after 5 (`CONFIG_ASYNC_TCP_MAX_ACK_TIME`). That is how `/pulse` used to be written, and a bench that polls `/read` ten times a second saw read timeouts during every 4-second button press, then a board that stopped answering altogether by the end of an hour-long run.
+- **Wait by arming a timer, answer with `RESPONSE_TRY_AGAIN`.** `/pulse` is the worked example: it arms a `Ticker` (in the core of both platforms - no extra library), returns, and answers from a chunked response whose filler says `RESPONSE_TRY_AGAIN` until the timer has fired. The client still gets its answer only when the line is released, and the board stays responsive throughout. On ESP8266 the timer uses `once_ms_scheduled()`, which runs the callback from `loop()` instead of SYS context; ESP32 has no such variant and its `Ticker` already dispatches from the `esp_timer` task.
 - **Register `/x/sub` before `/x`.** `AsyncCallbackWebHandler::canHandle` also matches by prefix (`url.startsWith(_uri + "/")`), so `/read` or `/ntp` declared first would swallow `/read/stat` / `/ntp/stat`.
 - POST parameters are form-encoded in the body: use `hasParam(name, true)` / `getParam(name, true)`. Without the second argument only the query string is searched - that silently broke `/serial` once; it now uses `param_any()` (body, then query).
 - Errors: 400 via `response_400()` for missing/incorrect parameters, 500 for hardware failures (I2C errors, UDP bind failure), 404 for unknown routes.

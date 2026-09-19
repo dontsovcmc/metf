@@ -1,6 +1,6 @@
 # HTTP API
 
-Protocol version **6** (`GET /version`). The board serves plain HTTP on port 80.
+Protocol version **7** (`GET /version`). The board serves plain HTTP on port 80.
 
 - POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string.
 - Numbers are decimal: `address=72`, not `0x48`.
@@ -14,6 +14,7 @@ Errors:
 | 400 | `parameter '<name>' not found` | a required GET parameter is missing |
 | 400 | `parameter '<name>' is incorrect` | the value or `action` is not accepted |
 | 404 | `Not found` | unknown URL or wrong method |
+| 409 | `pulse in progress` | `/pulse` while another pulse is still running |
 | 500 | a description | hardware failure: I2C error, UDP port busy, RGB not initialised |
 
 Contents: [Service](#service) · [GPIO](#gpio) · [I2C](#i2c) · [Serial log](#serial-log) · [NTP server](#ntp-server) · [RGB LED](#rgb-led)
@@ -26,7 +27,7 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `6`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`.
+Answers the protocol version, e.g. `7`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`.
 
 ## GPIO
 
@@ -70,7 +71,11 @@ Drives a pin for a fixed time and releases it - a button press with the timing d
 | `value` | level to drive, `1` or `0` |
 | `duration_ms` | how long to hold it, ms |
 
-The board sets the pin to `OUTPUT`, writes `value`, waits `duration_ms`, then sets the pin to `INPUT` (high-Z). The answer comes after the pulse ends, and the web server handles no other request in the meantime.
+The board sets the pin to `OUTPUT`, writes `value`, arms a timer for `duration_ms` and returns to serving requests. When the timer fires, the pin goes back to `INPUT` (high-Z) and only then does the answer `OK` go out.
+
+So the answer still means "the line is already released" - a client that waits for it needs no timer of its own - but the board is **not** deaf while the pulse runs: `/read`, `/ping` and everything else keep answering. Up to protocol 6 the wait was a `delay()` inside the request handler, which is the one thing ESPAsyncWebServer forbids there: the handler runs in the task that serves every connection of the board, so a 4-second button press blocked all HTTP for 4 seconds.
+
+The timer is the only one, because the pin is driven by the only one at a time: a second `/pulse` that arrives while the first is still running is refused with `409 pulse in progress`. Keep `duration_ms` shorter than the client's read timeout: the answer is held back until the pulse ends, and it leaves on the connection's next poll, so it can lag the pulse by up to half a second.
 
 ## I2C
 
