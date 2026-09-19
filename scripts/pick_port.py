@@ -17,7 +17,7 @@ USB-серийник у платы свой: у ESP32 это MAC (его же п
 каждой машины свой и в git не попадает:
 
     [board_serial]
-    esp32-c6-super-mini = REDACTED
+    esp32-c6-super-mini = AA:BB:CC:DD:EE:FF
     nodemcuv2 = 0001
 
 Если привязки нет, а плат подключено несколько - сборка останавливается со

@@ -28,7 +28,7 @@ the same one the board prints at boot - and on a USB-UART bridge a string from
 its EEPROM. `pio device list` shows it as `SER=`:
 
 ```
-/dev/cu.usbmodem2101  SER=REDACTED  USB JTAG/serial debug unit
+/dev/cu.usbmodemXXXX  SER=AA:BB:CC:DD:EE:FF  USB JTAG/serial debug unit
 ```
 
 Name the board once in `secrets.ini` (git-ignored, one file per machine) and
@@ -36,7 +36,7 @@ Name the board once in `secrets.ini` (git-ignored, one file per machine) and
 
 ```ini
 [board_serial]
-esp32-c6-super-mini = REDACTED
+esp32-c6-super-mini = AA:BB:CC:DD:EE:FF
 nodemcuv2 = 0001
 ```
 
