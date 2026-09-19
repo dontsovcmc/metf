@@ -7,7 +7,7 @@ ESPAsyncWebServer. Callback работает в задаче async_tcp, обще
 весь HTTP: стенд в это же время опрашивает `/read` каждые 100 мс и получал
 таймауты, а к концу часового прогона плата переставала отвечать совсем.
 
-    pytest test/board --metf-host 192.168.51.14 -v
+    pytest test/board --metf-host 192.168.1.50 -v
 """
 
 from __future__ import annotations

@@ -16,4 +16,5 @@ ESPTestFramework (METF): firmware for ESP8266/ESP32-C6 that turns the board into
 ## Conventions
 
 - Newer code comments, docstrings and pytest messages are written in Russian; match the surrounding file.
+- The repository is public. Nothing that identifies a particular piece of hardware or network goes into code, docs, commit messages or pull requests: MAC addresses, USB serial numbers, SSIDs, passwords. Examples use placeholders (`AA:BB:CC:DD:EE:FF`, `/dev/cu.usbmodemXXXX`); real values live in `secrets.ini`, which is git-ignored. Removing such a value later does not unpublish it - it stays in the history.
 - A route added, removed or changed means updating `docs/api.md` and the URL table in `README.md`, and bumping `metf_version` in `platformio.ini` if clients see the difference.

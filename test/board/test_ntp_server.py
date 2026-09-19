@@ -12,7 +12,7 @@
 Стенд тем самым проверяет не абстрактный NTP, а тот, которым будет пользоваться
 устройство.
 
-    pytest test/board --metf-host 192.168.51.14 -v
+    pytest test/board --metf-host 192.168.1.50 -v
 """
 
 from __future__ import annotations
