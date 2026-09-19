@@ -227,7 +227,7 @@ ESP8266, whose subscriptions live only as long as the returned
 
 ## Measurements
 
-All on the bench ESP32-C6 (`REDACTED`), 2026-09-19, firmware of this
+All on the bench ESP32-C6 SuperMini, 2026-09-19, firmware of this
 branch, temporary builds with credentials overridden through
 `PLATFORMIO_BUILD_FLAGS`. Times are seconds since reset, taken from the USB
 console.
