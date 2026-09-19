@@ -7,6 +7,7 @@
 #include <ESPAsyncTCP.h>
 #endif
 #include <ESPAsyncWebServer.h>
+#include <Ticker.h>
 
 #include "Wire.h"
 
@@ -32,6 +33,19 @@
 
 AsyncWebServer server(80);
 AsyncSerialBuffer asb;
+
+// Импульс отмеряет таймер ядра, а не обработчик запроса: callback сервера
+// работает в задаче async_tcp, которая обслуживает все соединения платы, и
+// delay() в ней останавливает их все разом (README библиотеки: «You can not
+// use yield or delay or any function that uses them inside the callbacks»).
+Ticker pulse_timer;
+static volatile bool pulse_busy = false;
+static uint8_t pulse_pin = 0;
+
+static void pulse_end() {
+    pinMode(pulse_pin, INPUT);     // отпускаем линию в high-Z
+    pulse_busy = false;
+}
 
 #ifdef ESP32
 NtpServer ntp;
@@ -195,8 +209,10 @@ void setup() {
     delay(300);                 // что осталось от прошлой прошивки
     WiFi.begin(VALUE(SSID_NAME), VALUE(SSID_PASS));
     if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-        LOG_ERROR("WiFi Failed!");
-        return;
+        // Дальше setup() идёт до конца: переподключение - дело ядра
+        // (WiFiSTA::_autoReconnect), а сервер, не поднятый на старте, не
+        // поднимется уже никогда, и плата останется доступной только ресетом
+        LOG_ERROR("WiFi Failed! Starting the server anyway");
     }
 
     // Модем-сон выключен намеренно. По умолчанию станция дремлет между маяками
@@ -306,11 +322,32 @@ void setup() {
         uint8_t value = request->getParam(PARAM_VALUE, true)->value().toInt();
         uint32_t ms   = request->getParam(PARAM_DURATION_MS, true)->value().toInt();
 
+        if (pulse_busy) {
+            request->send(409, "text/plain", "pulse in progress");
+            return;
+        }
+
+        pulse_pin = pin;
+        pulse_busy = true;
         pinMode(pin, OUTPUT);
         digitalWrite(pin, value);
-        delay(ms);                 // выдержка на самом ESP, точная
-        pinMode(pin, INPUT);       // отпускаем линию в high-Z (как press_low)
-        request->send(200, "text/plain", "OK");
+#ifdef ESP8266
+        pulse_timer.once_ms_scheduled(ms, pulse_end);   // не SYS-контекст, а loop()
+#else
+        pulse_timer.once_ms(ms, pulse_end);
+#endif
+
+        // Ответ ждёт конца импульса, как и раньше, но ожиданием занята не
+        // задача сервера: пока идёт импульс, наполнитель отдаёт RESPONSE_TRY_AGAIN,
+        // и остальные запросы обслуживаются как обычно
+        request->send(request->beginChunkedResponse("text/plain",
+            [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+                if (pulse_busy) return RESPONSE_TRY_AGAIN;
+                if (index >= 2) return 0;
+                if (maxLen < 2) return RESPONSE_TRY_AGAIN;
+                memcpy(buffer, "OK", 2);
+                return 2;
+            }));
     });
   
     server.on("/i2c", HTTP_POST, [](AsyncWebServerRequest *request){

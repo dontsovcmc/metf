@@ -57,7 +57,7 @@ If WiFi fails, `setup()` returns before any route is registered - the board is u
 
 ## Build flags and protocol version
 
-- `METF_VERSION` comes from `metf_version` in the `[env]` section of `platformio.ini` - one place for both boards. Bump it when the HTTP protocol changes: 5 added `/read/stat`, 6 added `/ntp`. `test/board` checks the minimum version it needs (`test_protocol_version`).
+- `METF_VERSION` comes from `metf_version` in the `[env]` section of `platformio.ini` - one place for both boards. Bump it when the HTTP protocol changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`. `test/board` checks the minimum version it needs (`test_protocol_version`).
 - Both envs set `LOG_LEVEL_DEBUG` and `SSID_NAME` / `SSID_PASS`.
 - The C6 env also sets `ESP32_C6_env`, `ARDUINO_USB_MODE=1` (native USB Serial/JTAG; the C6 has no USB-OTG), `ARDUINO_USB_CDC_ON_BOOT=1` (`Serial` → USB CDC), `ASB_BUFFER_BYTES=65536`, `ASB_MAX_LINE_LEN=128`, `RGB_DEFAULT_PIN=8`, `RGB_NUMBER=1`.
 - What `ASB_*` and `RGB_*` do: [architecture.md](architecture.md).
