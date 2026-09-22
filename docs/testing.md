@@ -3,9 +3,9 @@
 Three layers, one directory per suite. Each PlatformIO env picks its own suite with `test_filter`, so a host suite is never uploaded and a board suite is never compiled without Arduino.
 
 ```bash
-# Host: NTP packet rules (test/test_ntp_packet), no board needed
+# Host: NTP packets, the WiFi policy, the LED rhythms - no board needed
 pio test -e native
-pio test -e native -f test_ntp_packet            # a single suite
+pio test -e native -f test_wifi_policy           # a single suite
 
 # On-device Unity tests (test/test_board): hex helpers from lib/utils
 pio test -e nodemcuv2
@@ -18,8 +18,14 @@ pytest test/board --metf-host <ip> -k test_server_answers   # a single test
 - `test/test_board` asserts NodeMCU pin constants (`D0`, `D5`, `LED_BUILTIN == 2`), so it is a NodeMCU suite - it does not compile for `esp32-c6-super-mini`.
 - Without `--metf-host` the pytest suite skips: a test that cannot reach a board must say so, not time out.
 - Host tests check the protocol rules, `test/board` checks that the board really listens, answers and serves the assigned time. One without the other is not enough: a packet can be built right and never sent, or sent from the wrong port.
+- `test/board/test_wifi.py` checks the network state a live board reports and that `POST /wifi` refuses a bad network. It deliberately never calls `action=set` or `action=forget`: a test that moves the board to another network breaks the connection it is running over, and fixing that needs a cable.
 - `test/board/test_pulse.py` is where the non-blocking `/pulse` is proven: it pings the board throughout a 2-second pulse and fails if any of those pings waits. That property lives only on the board - no host test can see it.
-- Code that should be host-tested must be header-only pure C++ with no `Arduino.h` (like `src/ntp_packet.h`); the `native` env only adds `-Isrc`.
+- The host suites and what they hold:
+  - `test/test_ntp_packet` - the rules of the NTP reply;
+  - `test/test_wifi_policy` - every timing of the connect/access-point ladder, driven by a virtual clock over a simulated radio and router (`fake_radio.h`): the boot ladder, a router that moved to another channel, a phone occupying the setup page, a power cut where the router boots later than the board, the `millis()` wrap;
+  - `test/test_blinker` - the LED rhythms and the bench taking the LED over.
+- Fakes and simulators live beside the tests that use them, in `test/`, never in `src/`.
+- Code that should be host-tested must be pure C++ with no `Arduino.h` (`src/ntp_packet.h`, `src/wifi_policy.*`, `src/blinker.*`); the `native` env compiles exactly those sources (`build_src_filter`) and adds `-Isrc`.
 - The client in `test/board/conftest.py` (`Board`: `get`, `get_json`, `post`) is the only Python client in this repository. The `ESPTestFramework` library shown in `README.md` lives elsewhere.
 
 ## Static analysis and warnings
