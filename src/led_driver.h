@@ -34,6 +34,12 @@ public:
     LedDriver &operator=(LedDriver &&) = delete;
     virtual ~LedDriver() = default;
 
+    // Подготовить вывод. Один раз, из setup().
+    virtual void begin() {}
+
     // Зажечь цвет (чёрный - погасить). Зовётся только при смене цвета.
     virtual void show(Rgb color) = 0;
+
+    // Яркость 0..255, применяется на следующем show(). Кто не умеет - молчит.
+    virtual void set_brightness(uint8_t value) { (void)value; }
 };

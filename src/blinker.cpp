@@ -10,6 +10,16 @@ constexpr uint32_t kFastOffMs = 250;
 constexpr uint32_t kHeartOnMs = 2900;
 constexpr uint32_t kHeartOffMs = 100;
 
+// Снять флаг, поставленный другим потоком. Не exchange(): на ESP8266 нет
+// атомарных read-modify-write (__atomic_exchange_1 не линкуется). Флаг
+// ставят, а снимает только loop(), поэтому повторная постановка между load
+// и store сливается с первой - как и при exchange.
+bool take(std::atomic<bool> &flag) {
+    if (!flag.load()) return false;
+    flag.store(false);
+    return true;
+}
+
 bool in_on_phase(uint32_t elapsed, uint32_t on_ms, uint32_t off_ms) {
     return elapsed % (on_ms + off_ms) < on_ms;
 }
@@ -60,7 +70,7 @@ void Blinker::loop(uint32_t now_ms) {
         want = color_;
     }
 
-    const bool again = refresh_.exchange(false);
+    const bool again = take(refresh_);
     if (shown_valid_ && want == shown_ && !again) return;
     driver_.show(want);
     shown_ = want;

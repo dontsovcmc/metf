@@ -35,6 +35,15 @@ bool elapsed(uint32_t now, uint32_t since, uint32_t period) {
 
 bool valid_channel(int ch) { return ch >= 1 && ch <= 13; }
 
+// Снять флаг команды. Не exchange(): на ESP8266 нет атомарных
+// read-modify-write. Снимает только loop(), и повторная команда между load и
+// store сливается с первой - как и при exchange.
+bool take(std::atomic<bool> &flag) {
+    if (!flag.load()) return false;
+    flag.store(false);
+    return true;
+}
+
 // Канал, на котором сейчас радио, или 0
 uint8_t radio_channel() {
 #ifdef ESP32
@@ -120,7 +129,7 @@ void WifiLink::subscribe_events() {
         case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
             got_ip_.store(false);
             last_reason_.store(info.wifi_sta_disconnected.reason);
-            down_events_.fetch_add(1);
+            down_events_.store(down_events_.load() + 1); // пишет только задача событий
             break;
         default:
             break;
@@ -131,7 +140,7 @@ void WifiLink::subscribe_events() {
         WiFi.onStationModeDisconnected([this](const WiFiEventStationModeDisconnected &e) {
             got_ip_.store(false);
             last_reason_.store(e.reason);
-            down_events_.fetch_add(1);
+            down_events_.store(down_events_.load() + 1); // пишет только задача событий
         });
     on_got_ip_ = WiFi.onStationModeGotIP(
         [this](const WiFiEventStationModeGotIP &) { got_ip_.store(true); });
@@ -198,7 +207,7 @@ void WifiLink::apply_commands(uint32_t now) {
         policy_.request_connect();
     }
 
-    if (pending_forget_.exchange(false)) {
+    if (take(pending_forget_)) {
         bool ok = false;
         {
             const Guard g(mtx_);
@@ -210,8 +219,8 @@ void WifiLink::apply_commands(uint32_t now) {
         policy_.request_connect();
     }
 
-    if (pending_ap_.exchange(false)) policy_.request_ap();
-    if (activity_.exchange(false)) policy_.portal_activity(now);
+    if (take(pending_ap_)) policy_.request_ap();
+    if (take(activity_)) policy_.portal_activity(now);
 }
 
 void WifiLink::poll_button(uint32_t now) {

@@ -81,7 +81,9 @@ bool WifiStore::begin() {
     if (!p.begin(kNamespace, true)) return true;
 
     Creds c;
-    if (p.getString(kKeySsid, c.ssid, sizeof(c.ssid)) > 0 && c.ssid[0] != '\0') {
+    // isKey() - иначе ядро печатает ошибку чтения несуществующего ключа
+    if (p.isKey(kKeySsid) && p.getString(kKeySsid, c.ssid, sizeof(c.ssid)) > 0 &&
+        c.ssid[0] != '\0') {
         p.getString(kKeyPass, c.pass, sizeof(c.pass));
         c.from_nvs = true;
         creds_ = c;
@@ -89,7 +91,7 @@ bool WifiStore::begin() {
 
     Fast f;
     uint8_t raw[7] = {};
-    if (p.getBytes(kKeyFast, raw, sizeof(raw)) == sizeof(raw)) {
+    if (p.isKey(kKeyFast) && p.getBytes(kKeyFast, raw, sizeof(raw)) == sizeof(raw)) {
         f.channel = raw[0];
         memcpy(f.bssid, raw + 1, sizeof(f.bssid));
         if (f.valid()) fast_ = f;
@@ -107,15 +109,16 @@ bool WifiStore::write_all() {
         ok &= p.putString(kKeySsid, creds_.ssid) == strlen(creds_.ssid);
         ok &= p.putString(kKeyPass, creds_.pass) == strlen(creds_.pass);
     } else {
-        p.remove(kKeySsid);
-        p.remove(kKeyPass);
+        // isKey() - чтобы ядро не печатало ошибку стирания несуществующего
+        if (p.isKey(kKeySsid)) p.remove(kKeySsid);
+        if (p.isKey(kKeyPass)) p.remove(kKeyPass);
     }
 
     if (fast_.valid()) {
         uint8_t raw[7] = {fast_.channel};
         memcpy(raw + 1, fast_.bssid, sizeof(fast_.bssid));
         ok &= p.putBytes(kKeyFast, raw, sizeof(raw)) == sizeof(raw);
-    } else {
+    } else if (p.isKey(kKeyFast)) {
         p.remove(kKeyFast);
     }
     p.end();

@@ -20,13 +20,12 @@ public:
     explicit RgbLedDriver(uint8_t brightness) : brightness_(brightness) {}
 
     // Один раз, из setup(). Повторный addLeds завёл бы второй контроллер.
-    void begin() {
+    void begin() override {
         FastLED.addLeds<WS2812B, PIN, GRB>(&led_, 1);
         FastLED.setBrightness(brightness_.load());
     }
 
-    void set_brightness(uint8_t value) { brightness_.store(value); }
-    uint8_t brightness() const { return brightness_.load(); }
+    void set_brightness(uint8_t value) override { brightness_.store(value); }
 
     void show(Rgb color) override {
         led_ = CRGB(color.r, color.g, color.b);

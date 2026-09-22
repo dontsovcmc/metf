@@ -13,7 +13,7 @@ class GpioLedDriver : public LedDriver {
 public:
     GpioLedDriver(uint8_t pin, bool active_low) : pin_(pin), active_low_(active_low) {}
 
-    void begin() {
+    void begin() override {
         pinMode(pin_, OUTPUT);
         show(Rgb::off());
     }
