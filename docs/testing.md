@@ -21,3 +21,15 @@ pytest test/board --metf-host <ip> -k test_server_answers   # a single test
 - `test/board/test_pulse.py` is where the non-blocking `/pulse` is proven: it pings the board throughout a 2-second pulse and fails if any of those pings waits. That property lives only on the board - no host test can see it.
 - Code that should be host-tested must be header-only pure C++ with no `Arduino.h` (like `src/ntp_packet.h`); the `native` env only adds `-Isrc`.
 - The client in `test/board/conftest.py` (`Board`: `get`, `get_json`, `post`) is the only Python client in this repository. The `ESPTestFramework` library shown in `README.md` lives elsewhere.
+
+## Static analysis and warnings
+
+```bash
+pio check -e esp32-c6-super-mini --severity=medium   # cppcheck + clang-tidy
+pio check -e nodemcuv2 --severity=medium
+```
+
+- The tools and their flags are in `[env]` of `platformio.ini`; the clang-tidy check list is `.clang-tidy`, with the reason for every disabled check beside it. Libraries and the Arduino core are skipped: nothing is fixed there.
+- `HeaderFilterRegex` keeps headers from `.pio/libdeps` out by the dot in `.pio`. A checkout under a directory whose name contains a dot would let them back in.
+- `build_src_flags = -Wall -Wextra` applies to `src/` only. The goal for new code is zero warnings and zero `medium`/`high` findings; older code is fixed when it is touched.
+- `.clang-format` is applied to new and moved files, not to the whole tree at once - a mass reformat would bury every real change in the history.
