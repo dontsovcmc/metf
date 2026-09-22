@@ -75,8 +75,8 @@ the config, where it survives into the repository and outlives the cause.
 
 ## Environments
 
-- **ESP8266** (`nodemcuv2`): `espressif8266@4.2.1`, `ESPAsyncTCP`, ESP Async WebServer 1.2.3.
-- **ESP32-C6** (`esp32-c6-super-mini`, default): pioarduino `platform-espressif32`, `AsyncTCP`, mathieucarbou/ESPAsyncWebServer fork (v3.3.15, C6 support), FastLED.
+- **ESP8266** (`nodemcuv2`): `espressif8266@4.2.1`, ESP32Async `ESPAsyncTCP` 2.0.0, ESP32Async `ESPAsyncWebServer` 3.12.1 - the same web server as the C6 has, instead of the five-year-old fork the project used before.
+- **ESP32-C6** (`esp32-c6-super-mini`, default): pioarduino `platform-espressif32` 55.03.312-1 (Arduino core 3.3.12), ESP32Async `AsyncTCP` 3.5.0, ESP32Async `ESPAsyncWebServer` 3.12.1. No LED library: the WS2812 is driven by the core's RMT.
 - **native**: host-only, runs `test/test_ntp_packet` (see [testing.md](testing.md)).
 
 ## WiFi credentials
@@ -107,6 +107,6 @@ Moving the board to another network without a cable: connect a phone to `METF-XX
 
 - `METF_VERSION` comes from `metf_version` in the `[env]` section of `platformio.ini` - one place for both boards. Bump it when the HTTP protocol changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202`, 9 added `/wifi` and the setup page and gave `/rgb` the `status` action. `test/board` checks the minimum version it needs (`test_protocol_version`).
 - Both envs set `LOG_LEVEL_DEBUG` and `SSID_NAME` / `SSID_PASS`.
-- The C6 env also sets `ESP32_C6_env`, `ARDUINO_USB_MODE=1` (native USB Serial/JTAG; the C6 has no USB-OTG), `ARDUINO_USB_CDC_ON_BOOT=1` (`Serial` → USB CDC), `ASB_BUFFER_BYTES=65536`, `ASB_MAX_LINE_LEN=128`, `RGB_DEFAULT_PIN=8` (the onboard WS2812B, driven by the core's RMT - the FastLED dependency is gone) and `BUTTON_PIN=9` (BOOT).
+- The C6 env also sets `ESP32_C6_env`, `ARDUINO_USB_MODE=1` (native USB Serial/JTAG; the C6 has no USB-OTG), `ARDUINO_USB_CDC_ON_BOOT=1` (`Serial` → USB CDC), `ASB_BUFFER_BYTES=65536`, `ASB_MAX_LINE_LEN=128`, `RGB_DEFAULT_PIN=8` (the onboard WS2812B, driven by the core's RMT - no LED library at all) and `BUTTON_PIN=9` (BOOT).
 - The NodeMCU env sets `STATUS_LED_PIN=2` (the module's blue LED, lit by a low level) and `BUTTON_PIN=0` (FLASH). Both pins then belong to the firmware: a bench that needs GPIO 2 or GPIO 0 for the device under test must drop the flag, otherwise the status LED and the test drive the same line.
 - What `ASB_*`, `RGB_DEFAULT_PIN`, `STATUS_LED_PIN` and `BUTTON_PIN` do: [architecture.md](architecture.md).

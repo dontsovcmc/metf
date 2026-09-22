@@ -16,7 +16,7 @@ Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP is ESP32-only
 | `wifi_reason` | `src/wifi_reason.*` | the numbering of disconnect codes; no Arduino | everything else: it is a function, not an object |
 | `WifiPortal` | `src/wifi_portal.*` | `WifiLink`, `AsyncWebServer`, `DNSServer` | the LED, and the radio: it has no `WiFi.h` and no `#ifdef` for a platform |
 | `Blinker` | `src/blinker.*` | a `LedDriver`; no Arduino | the network, the server |
-| `RgbLedDriver`, `GpioLedDriver` | `src/rgb_led_driver.h`, `src/gpio_led_driver.h` | FastLED / `digitalWrite` | rhythms |
+| `RgbLedDriver`, `GpioLedDriver` | `src/rgb_led_driver.h`, `src/gpio_led_driver.h` | the core's RMT / `digitalWrite` | rhythms |
 | `Connectivity` | `src/connectivity.*` | all of the above; the facade | the bench routes |
 | `BenchRoutes` | `src/bench_routes.*` | GPIO, I2C, the DUT's UART, `NtpServer` | the network |
 
@@ -127,7 +127,7 @@ Ring of fixed-size lines filled from `loop()` and drained by `/read`.
 - Defaults (6000 / 60) suit the ESP8266. `esp32-c6-super-mini` uses 65536 / 128 → 511 usable lines, so a full Waterius session fits without eviction.
 - Longer lines are split into several buffer lines; the reader has to glue them back.
 - When full, the oldest line is evicted and counted in `dropped()` (reset by `flush()`, exposed by `/read/stat`). Eviction is otherwise silent, and a silently shortened log makes tests green for the wrong reason - `dropped > 0` means the log has a hole.
-- `LOCK()` / `UNLOCK()` defined here are the project's critical section: a FreeRTOS spinlock (`portENTER_CRITICAL(&mux)`) on ESP32, `noInterrupts()` on ESP8266. `main.cpp` reuses them for baud switching and `FastLED.show()`. On ESP32 they disable interrupts, so keep them short and don't take them for a single aligned word (see `dropped()`).
+- `LOCK()` / `UNLOCK()` defined here are the project's critical section: a FreeRTOS spinlock (`portENTER_CRITICAL(&mux)`) on ESP32, `noInterrupts()` on ESP8266. `BenchRoutes` reuses them for baud switching. On ESP32 they disable interrupts, so keep them short and don't take them for a single aligned word (see `dropped()`).
 
 ## NTP server (`src/NtpServer.*`, `src/ntp_packet.h`) - ESP32 only
 
@@ -163,7 +163,7 @@ The WS2812B is driven by the core's RMT, initialised once and written asynchrono
 
 Status brightness is 24 of 255: the WS2812B on the SuperMini at full brightness is painful to look at.
 
-`POST /rgb action=begin` takes the LED away from the status display and gives it to the bench, `action=status` gives it back, and so does a reboot. Colours set by the bench are stored, not written: `FastLED.show()` is called only from `loop()`, never from the server's task.
+`POST /rgb action=begin` takes the LED away from the status display and gives it to the bench, `action=status` gives it back, and so does a reboot. Colours set by the bench are stored, not written: the LED is touched only from `loop()`, never from the server's task.
 
 ## Logging (`src/logging.h`)
 

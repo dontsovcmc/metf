@@ -50,7 +50,7 @@ pio run -e esp32-c6-super-mini && pio run -e nodemcuv2 # -Wall -Wextra on src/
 ruff check .                                           # the pytest suites and scripts
 ```
 
-- **cppcheck** (`pio check`) covers everything, Arduino included, because it does not need to parse every header. Settings are in `[env]` of `platformio.ini`; `check_skip_packages = yes` keeps the core and libraries out.
+- **cppcheck** (`pio check`) covers everything, Arduino included, because it does not need to parse every header. Settings are in `[env]` of `platformio.ini`; `check_skip_packages = yes` keeps the core and libraries out. It is told `-DPROGMEM=`: the macro comes from the core, and without it cppcheck abandons the whole file it appears in (`[high] unknownMacro`) - a clean report that checked nothing.
 - **clang-tidy** (`scripts/tidy.sh`) covers only what builds on the host: the pure-C++ classes in `src/` (`WifiPolicy`, `Blinker`, `ntp_packet.h`) and the host test suites. It is not run on Arduino code on purpose: clang cannot parse the ESP toolchain's headers (`FreeRTOS.h`, the riscv32 `stddef.h` give parse errors), and every finding after a parse error is noise - "variable is not initialized" on a `const` with an initializer, "can be made static" on a method that uses members. The check list is `.clang-tidy`, with the reason for every disabled check beside it.
 - The clang-tidy bundled with PlatformIO has neither its own builtin headers nor the macOS SDK; the script passes both from the Command Line Tools. Without them it reports the same noise on host code too.
 - **`build_src_flags = -Wall -Wextra`** applies to `src/` only, so library warnings do not bury ours.

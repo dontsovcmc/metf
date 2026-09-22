@@ -14,11 +14,11 @@ covers only the network and its supervision.
 | Component | Version | Where the links point |
 |---|---|---|
 | METF firmware | protocol 10, this branch | this repository, relative links |
-| ESP32 Arduino core | 3.2.0, pinned by `platform-espressif32` 54.03.20 in `platformio.ini` | [espressif/arduino-esp32 @ 3.2.0](https://github.com/espressif/arduino-esp32/tree/3.2.0) |
+| ESP32 Arduino core | 3.3.12, pinned by `platform-espressif32` 55.03.312-1 in `platformio.ini` | [espressif/arduino-esp32 @ 3.3.12](https://github.com/espressif/arduino-esp32/tree/3.3.12) |
 | ESP8266 Arduino core | 3.1.2 (`espressif8266@4.2.1`) | [esp8266/Arduino @ 3.1.2](https://github.com/esp8266/Arduino/tree/3.1.2) |
-| AsyncTCP (ESP32) | 3.3.2 | [mathieucarbou/AsyncTCP @ v3.3.2](https://github.com/mathieucarbou/AsyncTCP/tree/v3.3.2) |
-| ESPAsyncWebServer (ESP32) | 3.3.15 | [mathieucarbou/ESPAsyncWebServer @ v3.3.15](https://github.com/mathieucarbou/ESPAsyncWebServer/tree/v3.3.15) |
-| ESP Async WebServer (ESP8266) | 1.2.3, PlatformIO registry | installed copy under `.pio/libdeps/nodemcuv2/` |
+| AsyncTCP (ESP32) | 3.5.0 | [ESP32Async/AsyncTCP @ v3.5.0](https://github.com/ESP32Async/AsyncTCP/tree/v3.5.0) |
+| ESPAsyncWebServer (both boards) | 3.12.1 | [ESP32Async/ESPAsyncWebServer @ v3.12.1](https://github.com/ESP32Async/ESPAsyncWebServer/tree/v3.12.1) |
+| ESPAsyncTCP (ESP8266) | 2.0.0 | [ESP32Async/ESPAsyncTCP @ v2.0.0](https://github.com/ESP32Async/ESPAsyncTCP/tree/v2.0.0) |
 
 The board on the bench is an ESP32-C6 SuperMini. The ESP8266 environment builds
 and is kept working, but nothing in this document was measured on it.
@@ -32,15 +32,15 @@ them are byte-identical.
 
 ```bash
 CORE=~/.platformio/packages/framework-arduinoespressif32@src-*/libraries/WiFi/src
-curl -s https://raw.githubusercontent.com/espressif/arduino-esp32/3.2.0/libraries/WiFi/src/STA.cpp | shasum -a 256
+curl -s https://raw.githubusercontent.com/espressif/arduino-esp32/3.3.12/libraries/WiFi/src/STA.cpp | shasum -a 256
 shasum -a 256 $CORE/STA.cpp
 ```
 
-One reference cannot be a permalink: the ESP8266 web server comes from the
-PlatformIO registry (`ESP Async WebServer@1.2.3`), whose tarball does not match
-any tagged commit of the upstream repository, so its README is cited by line
-inside the installed package. The identical sentence in the ESP32 fork is linked
-instead.
+Every reference here is a permalink into a tagged release. That became possible
+with the version bump: both boards now build against the same
+`ESP32Async/ESPAsyncWebServer` 3.12.1, instead of the ESP8266 pulling a registry
+tarball (`ESP Async WebServer@1.2.3`) that matched no tagged commit upstream and
+had to be cited by line inside the installed package.
 
 References into this repository are relative links. Line numbers there move with
 the code, so the name of the function or constant is always given beside them -
@@ -91,7 +91,7 @@ in JSON. All the LED modes blink except the steady blue of the access point, so 
 
 `setup()` runs to the end and `server.begin()` is always reached, connected or
 not. The server binds `IP_ANY` and needs no address to start
-(`AsyncServer::begin`, [`AsyncTCP.cpp:1551`](https://github.com/mathieucarbou/AsyncTCP/blob/v3.3.2/src/AsyncTCP.cpp#L1551)).
+(`AsyncServer::begin`, [`AsyncTCP.cpp:1515`](https://github.com/ESP32Async/AsyncTCP/blob/v3.5.0/src/AsyncTCP.cpp#L1515)).
 
 Protocol 9 goes further: `setup()` does not wait for the network at all. The
 first connect attempt happens five seconds after power-up, from `loop()`.
@@ -127,7 +127,7 @@ So the firmware takes it over, in one place and completely:
 
 *What this buys, beside the access point:* the `AUTH_FAIL` hole is closed. The
 core does not list `WIFI_REASON_AUTH_FAIL` among reconnectable reasons
-([`STA.cpp:58-84`](https://github.com/espressif/arduino-esp32/blob/3.2.0/libraries/WiFi/src/STA.cpp#L58-L84)), so an access point answering with it used to leave the board
+([`STA.cpp:66-91`](https://github.com/espressif/arduino-esp32/blob/3.3.12/libraries/WiFi/src/STA.cpp#L66-L91)), so an access point answering with it used to leave the board
 silently off the network forever. The policy does not care about the reason at
 all: an attempt that does not produce an IP within its timeout is simply a
 failed attempt.
@@ -149,9 +149,9 @@ what matters is only whether an IP arrived in time.
 The HTTP handlers run in the task that serves every connection of the board, and
 the library says so outright: *"This is fully asynchronous server and as such
 does not run on the loop thread"*, *"You can not use yield or delay or any
-function that uses them inside the callbacks"* ([`README.md`, "Important things
-to remember"](https://github.com/mathieucarbou/ESPAsyncWebServer/blob/v3.3.15/README.md#L363-L364)). The ESP8266 build uses the older 1.2.3 package, whose README
-carries the same sentence on line 138.
+function that uses them inside the callbacks"* ([`docs/configuration.md`, "Important things
+to remember"](https://github.com/ESP32Async/ESPAsyncWebServer/blob/v3.12.1/docs/configuration.md#L37-L38)). Both boards now run the same version of
+the library, so the warning is the same one on both.
 
 This is a WiFi principle, not a web-server one: a blocked task looks exactly
 like a lost network from the outside - timeouts on every route.
@@ -160,15 +160,15 @@ Protocol 9 adds handlers that would be much worse offenders than the old
 `/pulse`: `POST /wifi action=set` writes flash and re-associates, `action=scan`
 takes seconds on the radio. None of them do any of that. They validate, set an
 atomic flag and answer; `loop()` picks the flag up. The same rule covers the
-LED: `FastLED.show()` is called only from `loop()`, never from a handler.
+LED: the driver is touched only from `loop()`, never from a handler.
 
 *Enforced:* `WifiLink::request_set()` and `apply_commands()`
 ([`src/wifi_link.cpp`](../src/wifi_link.cpp)), `Blinker::hold()`
 ([`src/blinker.cpp`](../src/blinker.cpp)).
 *Cost of breaking it:* AsyncTCP discards poll events once its queue passes three
-quarters of `CONFIG_ASYNC_TCP_QUEUE_SIZE` = 64 ([`AsyncTCP.cpp:205`](https://github.com/mathieucarbou/AsyncTCP/blob/v3.3.2/src/AsyncTCP.cpp#L205)); an accepted
-client has 3 s to send its request ([`WebServer.cpp:56`](https://github.com/mathieucarbou/ESPAsyncWebServer/blob/v3.3.15/src/WebServer.cpp#L56)); unacknowledged data
-times out after `CONFIG_ASYNC_TCP_MAX_ACK_TIME` = 5000 ms ([`AsyncTCP.h:76`](https://github.com/mathieucarbou/AsyncTCP/blob/v3.3.2/src/AsyncTCP.h#L76)).
+quarters of `CONFIG_ASYNC_TCP_QUEUE_SIZE` = 64 ([`AsyncTCP.cpp:269`](https://github.com/ESP32Async/AsyncTCP/blob/v3.5.0/src/AsyncTCP.cpp#L269)); an accepted
+client has 3 s to send its request ([`WebServer.cpp:50`](https://github.com/ESP32Async/ESPAsyncWebServer/blob/v3.12.1/src/WebServer.cpp#L50)); unacknowledged data
+times out after `CONFIG_ASYNC_TCP_MAX_ACK_TIME` = 5000 ms ([`AsyncTCP.h:58`](https://github.com/ESP32Async/AsyncTCP/blob/v3.5.0/src/AsyncTCP.h#L58)).
 
 ### P6. Responsiveness beats power
 
@@ -348,20 +348,20 @@ read it off the phone.
 
 | # | Peculiarity | Where it bites | What the firmware does | Evidence |
 |---|---|---|---|---|
-| 1 | Async handlers run in the shared `async_tcp` task, and `delay()` there blocks every connection | a 4 s button press killed all HTTP for 4 s | `/pulse` arms a `Ticker`; `/wifi` and `/rgb` only set flags | [library README](https://github.com/mathieucarbou/ESPAsyncWebServer/blob/v3.3.15/README.md#L363-L364) |
-| 2 | AsyncTCP drops poll events when its queue fills | silent loss of responses under a blocked task | keep the task free (P5) | [`AsyncTCP.cpp:205`](https://github.com/mathieucarbou/AsyncTCP/blob/v3.3.2/src/AsyncTCP.cpp#L205), queue 64 |
-| 3 | An accepted client has 3 s to send its request | harness requests during a blocked task were refused, not queued | same | [`WebServer.cpp:56`](https://github.com/mathieucarbou/ESPAsyncWebServer/blob/v3.3.15/src/WebServer.cpp#L56) |
-| 4 | Unacked data times out at 5 s | a 4 s block left 1 s of margin | same | [`AsyncTCP.h:76`](https://github.com/mathieucarbou/AsyncTCP/blob/v3.3.2/src/AsyncTCP.h#L76) |
-| 5 | `tcp_poll` fires every ~500 ms (interval 1) | a deferred answer can lag the event it reports by up to half a second | `/pulse` answers at once; `/wifi` answers `202` and the client polls | [`AsyncTCP.cpp:68`](https://github.com/mathieucarbou/AsyncTCP/blob/v3.3.2/src/AsyncTCP.cpp#L68) |
+| 1 | Async handlers run in the shared `async_tcp` task, and `delay()` there blocks every connection | a 4 s button press killed all HTTP for 4 s | `/pulse` arms a `Ticker`; `/wifi` and `/rgb` only set flags | [library docs](https://github.com/ESP32Async/ESPAsyncWebServer/blob/v3.12.1/docs/configuration.md#L37-L38) |
+| 2 | AsyncTCP drops poll events when its queue fills | silent loss of responses under a blocked task | keep the task free (P5) | [`AsyncTCP.cpp:269`](https://github.com/ESP32Async/AsyncTCP/blob/v3.5.0/src/AsyncTCP.cpp#L269), queue 64 |
+| 3 | An accepted client has 3 s to send its request | harness requests during a blocked task were refused, not queued | same | [`WebServer.cpp:50`](https://github.com/ESP32Async/ESPAsyncWebServer/blob/v3.12.1/src/WebServer.cpp#L50) |
+| 4 | Unacked data times out at 5 s | a 4 s block left 1 s of margin | same | [`AsyncTCP.h:58`](https://github.com/ESP32Async/AsyncTCP/blob/v3.5.0/src/AsyncTCP.h#L58) |
+| 5 | `tcp_poll` fires every ~500 ms (interval 1) | a deferred answer can lag the event it reports by up to half a second | `/pulse` answers at once; `/wifi` answers `202` and the client polls | [`AsyncTCP.cpp:109`](https://github.com/ESP32Async/AsyncTCP/blob/v3.5.0/src/AsyncTCP.cpp#L109) |
 | 6 | ESP8266 `Ticker::once_ms` runs the callback in SYS context | GPIO work from SYS context is a needless risk | ESP8266 uses `once_ms_scheduled()` | [`Ticker.h:136-148`](https://github.com/esp8266/Arduino/blob/3.1.2/libraries/Ticker/src/Ticker.h#L136-L148) |
-| 7 | ESP32 `Ticker` dispatches from the `esp_timer` task | no SYS-context concern | `once_ms()` with a `std::function` | [`Ticker.cpp:38`](https://github.com/espressif/arduino-esp32/blob/3.2.0/libraries/Ticker/src/Ticker.cpp#L38) |
-| 8 | The core's own retry policy is invisible and not uniform | a board that stops trying, or tries behind the policy's back | `setAutoReconnect(false)`; the policy owns every attempt (P3) | [`STA.cpp:231`](https://github.com/espressif/arduino-esp32/blob/3.2.0/libraries/WiFi/src/STA.cpp#L231), [`STA.cpp:150-165`](https://github.com/espressif/arduino-esp32/blob/3.2.0/libraries/WiFi/src/STA.cpp#L150-L165) |
-| 9 | `AUTH_FAIL` is not in the core's reconnectable list | with a wrong password the core used to stop retrying for good | the policy retries on any failure, reason or no reason | [`STA.cpp:58-84`](https://github.com/espressif/arduino-esp32/blob/3.2.0/libraries/WiFi/src/STA.cpp#L58-L84) |
-| 10 | `STAClass::disconnect()` returns early when the station is not connected | a connect attempt in progress would not be interrupted, and the next `begin()` could be refused | an attempt starts with `esp_wifi_disconnect()` directly | [`STA.cpp:527-545`](https://github.com/espressif/arduino-esp32/blob/3.2.0/libraries/WiFi/src/STA.cpp#L527-L545) |
-| 11 | `WiFi.persistent(true)` is the default: every `begin()` writes the credentials into the core's own NVS | two copies of the network, one of them invisible to this firmware | `persistent(false)`; the only copy is `WifiStore`'s | [`WiFiGeneric.cpp:403`](https://github.com/espressif/arduino-esp32/blob/3.2.0/libraries/WiFi/src/WiFiGeneric.cpp#L403) |
+| 7 | ESP32 `Ticker` dispatches from the `esp_timer` task | no SYS-context concern | `once_ms()` with a `std::function` | [`Ticker.cpp:43`](https://github.com/espressif/arduino-esp32/blob/3.3.12/libraries/Ticker/src/Ticker.cpp#L43) |
+| 8 | The core's own retry policy is invisible and not uniform | a board that stops trying, or tries behind the policy's back | `setAutoReconnect(false)`; the policy owns every attempt (P3) | [`STA.cpp:600`](https://github.com/espressif/arduino-esp32/blob/3.3.12/libraries/WiFi/src/STA.cpp#L600), [`STA.cpp:164`](https://github.com/espressif/arduino-esp32/blob/3.3.12/libraries/WiFi/src/STA.cpp#L164) |
+| 9 | `AUTH_FAIL` is not in the core's reconnectable list | with a wrong password the core used to stop retrying for good | the policy retries on any failure, reason or no reason | [`STA.cpp:66-91`](https://github.com/espressif/arduino-esp32/blob/3.3.12/libraries/WiFi/src/STA.cpp#L66-L91) |
+| 10 | `STAClass::disconnect()` used to return early when the station was not connected (core 3.2.0) | a connect attempt in progress would not be interrupted, and the next `begin()` could be refused | an attempt starts with `esp_wifi_disconnect()` directly - kept, because it is exactly what the core now does itself | **fixed upstream in 3.3.12**: [`STA.cpp:537-539`](https://github.com/espressif/arduino-esp32/blob/3.3.12/libraries/WiFi/src/STA.cpp#L537-L539) calls `esp_wifi_disconnect()` first thing |
+| 11 | `WiFi.persistent(true)` is the default: every `begin()` writes the credentials into the core's own NVS | two copies of the network, one of them invisible to this firmware | `persistent(false)`; the only copy is `WifiStore`'s | [`WiFiGeneric.cpp:383`](https://github.com/espressif/arduino-esp32/blob/3.3.12/libraries/WiFi/src/WiFiGeneric.cpp#L383) |
 | 12 | One radio cannot hold AP and STA on different channels: the AP keeps its configured channel and stops beaconing, while `softAP()` returned true | the setup page is unreachable exactly when it is needed | the AP starts on the radio's channel and follows it (3 s of mismatch, at most one move per 10 s) | `WifiLink::start_ap()`, `follow_channel()` |
 | 13 | Modem sleep is on by default; replies wait for the DTIM beacon | ping 6 -> 260 ms, drops on a churned network | `WiFi.setSleep(false)`, re-applied after every mode change | [architecture.md](architecture.md) |
-| 14 | `AsyncServer::begin()` binds `IP_ANY` and needs no address | is what makes P2 possible at all | server starts before any IP exists | [`AsyncTCP.cpp:1551`](https://github.com/mathieucarbou/AsyncTCP/blob/v3.3.2/src/AsyncTCP.cpp#L1551) |
+| 14 | `AsyncServer::begin()` binds `IP_ANY` and needs no address | is what makes P2 possible at all | server starts before any IP exists | [`AsyncTCP.cpp:1515`](https://github.com/ESP32Async/AsyncTCP/blob/v3.5.0/src/AsyncTCP.cpp#L1515) |
 | 15 | DHCP may hand out a different address after an outage | the harness addresses the board by IP | the address is pinned by MAC on the router; the address that came back is printed, shown on the page and returned by `GET /wifi` | `WifiLink::note_up()` |
 | 16 | `millis()` wraps after 49 days | a board that lives longer than that | every comparison is an unsigned difference; a host test drives the policy across the wrap | `WifiPolicy::elapsed()`, `test_millis_wrap_during_outage` |
 | 17 | ESP8266 event subscriptions die with the returned handler object | the ESP8266 build would log nothing | the handlers are members of `WifiLink` | `src/wifi_link.h` |

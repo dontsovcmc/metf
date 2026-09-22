@@ -8,7 +8,8 @@ NtpServer::NtpServer()
     : _udp(0), _running(false), _drop(false), _time_set(false),
       _base_epoch(0), _base_millis(0), _mux(portMUX_INITIALIZER_UNLOCKED)
 {
-    memset(&_stat, 0, sizeof(_stat));
+    // Поля Stat обнуляет сам тип: memset по объекту с IPAddress внутри -
+    // это запись мимо его конструктора, и GCC 14 на неё ругается
 }
 
 bool NtpServer::begin(const uint32_t epoch, const uint16_t port)
