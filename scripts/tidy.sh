@@ -26,9 +26,9 @@ if [ "$(uname)" = Darwin ]; then
     EXTRA="-isysroot $SDK -isystem $SDK/usr/include/c++/v1 -isystem $RES"
 fi
 
-FILES=${*:-"src/wifi_policy.cpp test/test_ntp_packet/test_ntp_packet.cpp test/test_wifi_policy/test_main.cpp"}
+FILES=${*:-"src/wifi_policy.cpp src/blinker.cpp test/test_ntp_packet/test_ntp_packet.cpp test/test_wifi_policy/test_main.cpp test/test_blinker/test_main.cpp"}
 
 # shellcheck disable=SC2086
 "$TIDY" --quiet --config-file=.clang-tidy $FILES -- \
-    -std=c++17 -Isrc -I"$UNITY" -Itest/test_wifi_policy $EXTRA 2>&1 \
+    -std=c++17 -Isrc -I"$UNITY" -Itest/test_wifi_policy -Itest/test_blinker $EXTRA 2>&1 \
     | grep -v "warnings generated" || true
