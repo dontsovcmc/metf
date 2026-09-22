@@ -108,5 +108,5 @@ Moving the board to another network without a cable: connect a phone to `METF-XX
 - `METF_VERSION` comes from `metf_version` in the `[env]` section of `platformio.ini` - one place for both boards. Bump it when the HTTP protocol changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202`, 9 added `/wifi` and the setup page and gave `/rgb` the `status` action. `test/board` checks the minimum version it needs (`test_protocol_version`).
 - Both envs set `LOG_LEVEL_DEBUG` and `SSID_NAME` / `SSID_PASS`.
 - The C6 env also sets `ESP32_C6_env`, `ARDUINO_USB_MODE=1` (native USB Serial/JTAG; the C6 has no USB-OTG), `ARDUINO_USB_CDC_ON_BOOT=1` (`Serial` → USB CDC), `ASB_BUFFER_BYTES=65536`, `ASB_MAX_LINE_LEN=128`, `RGB_DEFAULT_PIN=8` (the onboard WS2812B) and `BUTTON_PIN=9` (BOOT).
-- The NodeMCU env sets `STATUS_LED_PIN=2` (the module's blue LED, lit by a low level) and `BUTTON_PIN=0` (FLASH).
+- The NodeMCU env sets `STATUS_LED_PIN=2` (the module's blue LED, lit by a low level) and `BUTTON_PIN=0` (FLASH). Both pins then belong to the firmware: a bench that needs GPIO 2 or GPIO 0 for the device under test must drop the flag, otherwise the status LED and the test drive the same line.
 - What `ASB_*`, `RGB_DEFAULT_PIN`, `STATUS_LED_PIN` and `BUTTON_PIN` do: [architecture.md](architecture.md).
