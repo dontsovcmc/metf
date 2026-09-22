@@ -10,6 +10,7 @@
 
 #include "logging.h"
 #include "timing.h"
+#include "wifi_reason.h"
 
 using Action = WifiPolicy::Action;
 using State = WifiPolicy::State;
@@ -42,15 +43,6 @@ bool valid_channel(int ch) { return ch >= 1 && ch <= 13; }
 uint8_t radio_channel() {
     const int ch = WiFi.channel();
     return valid_channel(ch) ? static_cast<uint8_t>(ch) : 0;
-}
-
-const char *reason_name(int reason) {
-#ifdef ESP32
-    return WiFi.disconnectReasonName(static_cast<wifi_err_reason_t>(reason));
-#else
-    (void)reason;
-    return "";
-#endif
 }
 
 } // namespace
@@ -114,7 +106,7 @@ void WifiLink::subscribe_events() {
             break;
         case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
             got_ip_.store(false);
-            last_reason_.store(info.wifi_sta_disconnected.reason);
+            if (!take(self_down_)) last_reason_.store(info.wifi_sta_disconnected.reason);
             down_events_.store(down_events_.load() + 1); // пишет только задача событий
             break;
         default:
@@ -162,12 +154,11 @@ void WifiLink::loop() {
     const uint32_t down_events = down_events_.load();
     if (down_events != seen_down_events_) {
         seen_down_events_ = down_events;
-        const int reason = last_reason_.load();
-        note_down(reason, reason_name(reason));
+        note_down(last_reason_.load());
     }
 
     if (f.connected && !was_connected_) on_connected();
-    if (!f.connected && was_connected_ && !down_) note_down(last_reason_.load(), "");
+    if (!f.connected && was_connected_ && !down_) note_down(last_reason_.load());
     was_connected_ = f.connected;
     connected_.store(f.connected);
 
@@ -187,6 +178,7 @@ void WifiLink::apply_commands(uint32_t now) {
             LOG_ERROR("wifi: new network kept in RAM only, flash write failed");
         }
         LOG_INFO("wifi: new network " << set_ssid_ << ", connecting");
+        last_reason_.store(0);   // причина от прошлой сети к новой не относится
         memset(set_pass_, 0, sizeof(set_pass_));
         pending_set_.store(false);
         policy_.request_connect();
@@ -241,6 +233,7 @@ void WifiLink::execute(Action action, uint32_t now) {
     case Action::RestartRadio:
         LOG_INFO("wifi: restarting radio");
         radio_off_ap_ = ap_active(); // погаснет вместе с радио - поднимем заново
+        self_down_.store(true);      // разрыв наш: причиной его не считаем
         WiFi.mode(WIFI_OFF);
         radio_off_ = true;
         radio_off_at_ = now;
@@ -261,6 +254,7 @@ void WifiLink::attempt(bool fast) {
 
     // Прошлая попытка могла ещё идти: обрываем её сами. Arduino disconnect()
     // тут не годится - он молча выходит, если связи ещё нет
+    self_down_.store(true);          // разрыв наш: причиной его не считаем
 #ifdef ESP32
     esp_wifi_disconnect();
 #else
@@ -348,6 +342,7 @@ void WifiLink::follow_channel(uint32_t now) {
 
 void WifiLink::on_connected() {
     note_up();
+    last_reason_.store(0);   // прошлая беда кончилась, и в JSON ей не место
 
     WifiStore::Fast f;
     f.channel = static_cast<uint8_t>(WiFi.channel());
@@ -407,8 +402,10 @@ void WifiLink::poll_scan() {
     }
     WiFi.scanDelete();
 
-    // Сильные сверху
-    std::sort(found, found + count,
+    // Сильные сверху. Границу пишем явно: из цикла выше компилятор её не
+    // выводит и ругается (-Warray-bounds) на развёрнутую сортировку.
+    const int total = count < kScanMax ? count : kScanMax;
+    std::sort(found, found + total,
               [](const ScanEntry &a, const ScanEntry &b) { return a.rssi > b.rssi; });
 
     const std::lock_guard<Mutex> g(mtx_);
@@ -484,18 +481,21 @@ void WifiLink::publish_status(uint32_t now, const WifiPolicy::Facts &f) {
 
 // ---------------------------------------------------------------- журнал
 
-void WifiLink::note_down(int reason, const char *name) {
+void WifiLink::note_down(int reason) {
     const uint32_t now = millis();
+    // Причина словами - та же, что видит человек на странице настройки:
+    // имя из ядра есть только у ESP32, а разбор общий для обеих плат
+    const char *cause = wifi_problem_key(wifi_problem(reason));
     if (!down_) {
         down_ = true;
         down_since_.store(now);
         last_report_ = now;
-        LOG_ERROR("wifi: disconnected, reason " << reason << " " << name);
+        LOG_ERROR("wifi: disconnected, " << cause << ", reason " << reason);
     } else if (elapsed(now, last_report_, kReportPeriodMs)) {
         last_report_ = now;
         LOG_ERROR("wifi: offline " << (now - down_since_.load()) / 1000 << " s, "
-                                   << policy_.failed_attempts() << " attempts, last reason "
-                                   << reason);
+                                   << policy_.failed_attempts() << " attempts, last "
+                                   << cause << " (" << reason << ")");
     }
 }
 

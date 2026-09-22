@@ -1,0 +1,33 @@
+# Линтер питоновской части: тесты живой платы, стенд, скрипты сборки.
+# Запуск - ruff check . (см. docs/testing.md). C++ проверяют cppcheck
+# (pio check) и clang-tidy (scripts/tidy.sh).
+line-length = 100
+target-version = "py39"
+extend-exclude = [".pio", "__pycache__"]
+
+[lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes: неиспользованное, опечатки в именах
+    "I",        # порядок импортов
+    "UP",       # устаревшие конструкции
+    "B",        # bugbear: ловушки вроде изменяемого значения по умолчанию
+    "SIM",      # упрощения
+    "PT",       # стиль pytest
+    "RUF",
+]
+ignore = [
+    # Кириллица в комментариях и в именах тестов - соглашение проекта
+    # (CLAUDE.md), а не путаница похожих букв.
+    "RUF001", "RUF002", "RUF003",
+    # assert в тестах - это и есть тест
+    "PT018",
+]
+
+[lint.per-file-ignores]
+# В драйвере AT-платы длинные строки - это куски протокола и ссылки на
+# исходники библиотек в комментариях; переносить их вредно.
+"Utils/hil/atboard.py" = ["E501"]
+
+[lint.isort]
+known-first-party = ["atboard", "router"]

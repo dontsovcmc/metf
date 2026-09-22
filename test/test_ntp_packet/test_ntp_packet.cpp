@@ -1,5 +1,5 @@
 #include <unity.h>
-#include <string.h>
+#include <cstring>
 
 #include "ntp_packet.h"
 
@@ -32,7 +32,7 @@ static void make_request(uint8_t *req)
     req[15] = 52;
 }
 
-void test_request_recognized(void)
+void test_request_recognized()
 {
     uint8_t req[NTP_PACKET_SIZE];
     make_request(req);
@@ -40,20 +40,20 @@ void test_request_recognized(void)
     TEST_ASSERT_TRUE(ntp_is_client_request(req, NTP_PACKET_SIZE));
 }
 
-void test_short_packet_is_not_a_request(void)
+void test_short_packet_is_not_a_request()
 {
     uint8_t req[NTP_PACKET_SIZE];
     make_request(req);
 
     TEST_ASSERT_FALSE(ntp_is_client_request(req, NTP_PACKET_SIZE - 1));
-    TEST_ASSERT_FALSE(ntp_is_client_request(0, NTP_PACKET_SIZE));
+    TEST_ASSERT_FALSE(ntp_is_client_request(nullptr, NTP_PACKET_SIZE));
 }
 
 /*
 Чужой ответ на наш порт - не запрос. Иначе плата отвечала бы сама себе и
 своему же соседу по сети, а счётчик обращений врал бы.
 */
-void test_server_packet_is_not_a_request(void)
+void test_server_packet_is_not_a_request()
 {
     uint8_t reply[NTP_PACKET_SIZE];
     memset(reply, 0, NTP_PACKET_SIZE);
@@ -62,7 +62,7 @@ void test_server_packet_is_not_a_request(void)
     TEST_ASSERT_FALSE(ntp_is_client_request(reply, NTP_PACKET_SIZE));
 }
 
-void test_reply_is_acceptable_to_client(void)
+void test_reply_is_acceptable_to_client()
 {
     uint8_t req[NTP_PACKET_SIZE];
     uint8_t out[NTP_PACKET_SIZE];
@@ -83,7 +83,7 @@ void test_reply_is_acceptable_to_client(void)
 Версию возвращаем клиентскую: строгие реализации сверяют её, а нам это ничего
 не стоит.
 */
-void test_reply_keeps_client_version(void)
+void test_reply_keeps_client_version()
 {
     uint8_t req[NTP_PACKET_SIZE];
     uint8_t out[NTP_PACKET_SIZE];
@@ -103,7 +103,7 @@ void test_reply_keeps_client_version(void)
 Метка отправления клиента возвращается в поле originate - по ней клиент
 опознаёт, что ответ на его запрос, а не на чей-то чужой.
 */
-void test_reply_echoes_client_transmit_stamp(void)
+void test_reply_echoes_client_transmit_stamp()
 {
     uint8_t req[NTP_PACKET_SIZE];
     uint8_t out[NTP_PACKET_SIZE];
@@ -122,7 +122,7 @@ void test_reply_echoes_client_transmit_stamp(void)
 Время получения не позже времени отправления: обратный порядок дал бы клиенту
 отрицательную задержку, и компенсация уехала бы в минус.
 */
-void test_receive_is_not_after_transmit(void)
+void test_receive_is_not_after_transmit()
 {
     uint8_t req[NTP_PACKET_SIZE];
     uint8_t out[NTP_PACKET_SIZE];
@@ -138,7 +138,7 @@ void test_receive_is_not_after_transmit(void)
 Дробная часть - доли 2^-32, а не миллисекунды. Ошибка здесь не видна ни в
 одном тесте на секунды, а клиенту даёт полсекунды промаха.
 */
-void test_fraction_encodes_milliseconds(void)
+void test_fraction_encodes_milliseconds()
 {
     uint8_t packet[NTP_PACKET_SIZE];
     memset(packet, 0, NTP_PACKET_SIZE);
@@ -158,7 +158,7 @@ void test_fraction_encodes_milliseconds(void)
 Девятьсот миллисекунд - проверка на переполнение: наивное msec << 32 в 32
 битах обнуляется, и дробная часть всегда выходила бы нулём.
 */
-void test_fraction_does_not_overflow(void)
+void test_fraction_does_not_overflow()
 {
     uint8_t packet[NTP_PACKET_SIZE];
     memset(packet, 0, NTP_PACKET_SIZE);
@@ -175,7 +175,7 @@ void test_fraction_does_not_overflow(void)
 Метка 1900 года читается нулём, а не отрицательным временем: у клиента это
 вычитание 70 лет из беззнакового, то есть часы в 2484 году.
 */
-void test_epoch_before_1970_reads_as_zero(void)
+void test_epoch_before_1970_reads_as_zero()
 {
     uint8_t packet[NTP_PACKET_SIZE];
     memset(packet, 0, NTP_PACKET_SIZE);

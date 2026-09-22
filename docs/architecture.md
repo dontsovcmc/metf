@@ -13,13 +13,14 @@ Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP is ESP32-only
 | `WifiPolicy` | `src/wifi_policy.*` | time and facts; no Arduino at all | the radio, flash, HTTP |
 | `WifiStore` | `src/wifi_store.*` | `Preferences` (ESP32) or `EEPROM` (ESP8266) | the radio, HTTP |
 | `WifiLink` | `src/wifi_link.*` | `WiFi`, the policy, the store, the button | HTTP, the LED |
+| `wifi_reason` | `src/wifi_reason.*` | the numbering of disconnect codes; no Arduino | everything else: it is a function, not an object |
 | `WifiPortal` | `src/wifi_portal.*` | `WifiLink`, `AsyncWebServer`, `DNSServer` | the LED, and the radio: it has no `WiFi.h` and no `#ifdef` for a platform |
 | `Blinker` | `src/blinker.*` | a `LedDriver`; no Arduino | the network, the server |
 | `RgbLedDriver`, `GpioLedDriver` | `src/rgb_led_driver.h`, `src/gpio_led_driver.h` | FastLED / `digitalWrite` | rhythms |
 | `Connectivity` | `src/connectivity.*` | all of the above; the facade | the bench routes |
 | `BenchRoutes` | `src/bench_routes.*` | GPIO, I2C, the DUT's UART, `NtpServer` | the network |
 
-Two of them - `WifiPolicy` and `Blinker` - are pure C++ and are therefore tested on a PC (`test/test_wifi_policy`, `test/test_blinker`), with a simulated radio and a fake LED that live in `test/`.
+Three of them - `WifiPolicy`, `Blinker` and `wifi_reason` - are pure C++ and are therefore tested on a PC (`test/test_wifi_policy`, `test/test_blinker`, `test/test_wifi_reason`), with a simulated radio and a fake LED that live in `test/`. `wifi_reason` turns a disconnect code into the cause a human reads; `WifiPortal` puts the phrase on the page and the key in `GET /wifi`, and `WifiLink` puts the same word in the console.
 
 The facade is called `Connectivity` and not `Network` because the ESP32 core has its own `Network.h` and a global object named `Network`; on a case-insensitive file system a `network.h` of ours would be included in its place, and the build fails in the middle of the library.
 

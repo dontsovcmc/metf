@@ -15,8 +15,12 @@ pytest test/board --metf-host <ip> -v
 pytest test/board --metf-host <ip> -k test_server_answers   # a single test
 
 # The stand: the board's own access point and the setup page in it, walked by a
-# second board that plays the phone (Utils/hil)
+# second board that plays the phone, plus the four troubles a managed router can
+# cause on purpose - a wrong password, a moved channel, a reboot, no network at
+# all (Utils/hil)
 pytest Utils/hil --stand -v
+pytest Utils/hil --stand -v -k router        # only the router troubles, minutes
+pytest Utils/hil --stand -m "not slow"       # only what takes seconds
 ```
 
 - `test/test_board` asserts NodeMCU pin constants (`D0`, `D5`, `LED_BUILTIN == 2`), so it is a NodeMCU suite - it does not compile for `esp32-c6-super-mini`.
@@ -27,21 +31,23 @@ pytest Utils/hil --stand -v
 - The host suites and what they hold:
   - `test/test_ntp_packet` - the rules of the NTP reply;
   - `test/test_wifi_policy` - every timing of the connect/access-point ladder, driven by a virtual clock over a simulated radio and router (`fake_radio.h`): the boot ladder, a router that moved to another channel, a phone occupying the setup page, a power cut where the router boots later than the board, the `millis()` wrap;
-  - `test/test_blinker` - the LED rhythms and the bench taking the LED over.
+  - `test/test_blinker` - the LED rhythms and the bench taking the LED over;
+  - `test/test_wifi_reason` - the core's disconnect code turned into the cause a human reads: a password that was not accepted, a network that is not on the air, a router that went quiet.
 - Fakes and simulators live beside the tests that use them, in `test/`, never in `src/`.
-- Code that should be host-tested must be pure C++ with no `Arduino.h` (`src/ntp_packet.h`, `src/wifi_policy.*`, `src/blinker.*`); the `native` env compiles exactly those sources (`build_src_filter`) and adds `-Isrc`.
-- `Utils/hil` is the fourth layer and the only one that enters the board's own access point: a NodeMCU with Espressif's ESP-AT firmware joins `METF-XXXX` over the air and walks the setup page, because the machine running the tests has one radio and it is busy with the bench network. What it covers and how the AT board is set up: [Utils/hil/README.md](../Utils/hil/README.md).
+- Code that should be host-tested must be pure C++ with no `Arduino.h` (`src/ntp_packet.h`, `src/wifi_policy.*`, `src/blinker.*`, `src/wifi_reason.*`); the `native` env compiles exactly those sources (`build_src_filter`) and adds `-Isrc`.
+- `Utils/hil` is the fourth layer, and the only one that can both enter the board's own access point and break the network under the board. A NodeMCU with Espressif's ESP-AT firmware joins `METF-XXXX` over the air and walks the setup page, because the machine running the tests has one radio and it is busy with the bench network; a managed router (WT32-ETH01, `esp32_nat_router`, console over the wire) changes its password, moves to another channel, reboots and goes off the air, so the four troubles a user meets are staged for real instead of being imitated with a made-up network name. What it covers and how both boards are set up: [Utils/hil/README.md](../Utils/hil/README.md).
 - The client in `test/board/conftest.py` (`Board`: `get`, `get_json`, `post`) is the only Python client in this repository. The `ESPTestFramework` library shown in `README.md` lives elsewhere.
 
 ## Static analysis and warnings
 
-Three tools, because no single one sees all of the code:
+Four tools, because no single one sees all of the code - three for C++ and one for the Python of the test suites:
 
 ```bash
 pio check -e esp32-c6-super-mini --severity=medium   # cppcheck: src/, lib/, host tests
 pio check -e nodemcuv2 --severity=medium
 scripts/tidy.sh                                        # clang-tidy: host-buildable code
 pio run -e esp32-c6-super-mini && pio run -e nodemcuv2 # -Wall -Wextra on src/
+ruff check .                                           # the pytest suites and scripts
 ```
 
 - **cppcheck** (`pio check`) covers everything, Arduino included, because it does not need to parse every header. Settings are in `[env]` of `platformio.ini`; `check_skip_packages = yes` keeps the core and libraries out.
@@ -49,4 +55,5 @@ pio run -e esp32-c6-super-mini && pio run -e nodemcuv2 # -Wall -Wextra on src/
 - The clang-tidy bundled with PlatformIO has neither its own builtin headers nor the macOS SDK; the script passes both from the Command Line Tools. Without them it reports the same noise on host code too.
 - **`build_src_flags = -Wall -Wextra`** applies to `src/` only, so library warnings do not bury ours.
 - The target for new code is zero warnings and zero `medium`/`high` findings. Older code is fixed when it is touched.
+- **ruff** covers every `.py` in the repository: `test/board`, `Utils/hil` and `scripts/`. The rules are in `.ruff.toml`; the ambiguous-character checks (`RUF001`-`RUF003`) are off because comments and test names are written in Russian on purpose, and Cyrillic letters are not a typo here.
 - `.clang-format` is applied to new and moved files, not to the whole tree at once - a mass reformat would bury every real change in the history.

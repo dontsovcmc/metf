@@ -17,21 +17,28 @@ def test_wifi_status_says_connected(board):
 
 
 def test_wifi_status_has_no_password(board):
-    """Пароль наружу не отдаётся никогда."""
-    body = board.get("/wifi").lower()
-    assert "password" not in body
-    assert "pass" not in body
+    """Пароль наружу не отдаётся никогда.
+
+    Проверяем имена полей, а не подстроку "pass" во всём ответе: причина
+    отказа называется "password" (пароль сети не приняли), и поиск подстроки
+    объявил бы утечкой честное сообщение о беде - причём ровно в тот момент,
+    когда оно и нужно человеку.
+    """
+    st = board.get_json("/wifi")
+    assert [k for k in st if "pass" in k.lower()] == [], st
 
 
 def test_wifi_status_fields(board):
     st = board.get_json("/wifi")
     for key in ("mode", "ssid", "source", "rssi", "channel", "fast",
                 "ap_ssid", "ap_up", "ap_clients", "offline_s", "attempts",
-                "last_reason", "hw_error", "pending", "scanning"):
+                "last_reason", "problem", "hw_error", "pending", "scanning"):
         assert key in st, f"нет поля {key}: {st}"
     assert st["source"] in ("build", "saved"), st
     assert 1 <= st["channel"] <= 13, st
     assert st["hw_error"] is False, "плата сообщает об ошибке железа"
+    # Плата в сети: прошлая причина отказа - история, а не беда
+    assert st["problem"] == "none", st
 
 
 def test_post_wifi_without_action(board):

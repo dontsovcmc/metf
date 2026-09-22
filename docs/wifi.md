@@ -13,7 +13,7 @@ covers only the network and its supervision.
 
 | Component | Version | Where the links point |
 |---|---|---|
-| METF firmware | protocol 9, this branch | this repository, relative links |
+| METF firmware | protocol 10, this branch | this repository, relative links |
 | ESP32 Arduino core | 3.2.0, pinned by `platform-espressif32` 54.03.20 in `platformio.ini` | [espressif/arduino-esp32 @ 3.2.0](https://github.com/espressif/arduino-esp32/tree/3.2.0) |
 | ESP8266 Arduino core | 3.1.2 (`espressif8266@4.2.1`) | [esp8266/Arduino @ 3.1.2](https://github.com/esp8266/Arduino/tree/3.1.2) |
 | AsyncTCP (ESP32) | 3.3.2 | [mathieucarbou/AsyncTCP @ v3.3.2](https://github.com/mathieucarbou/AsyncTCP/tree/v3.3.2) |
@@ -218,6 +218,44 @@ password, which is never returned by anything.
 *Why saved wins:* reflashing a board that is already in another room needs a
 laptop and a cable in that room. Setting it up from a phone needs neither.
 
+### P9. A failure is reported in words, not in a code
+
+A board whose password was mistyped and a board whose router is switched off
+look identical from the outside: the bench address goes quiet and an access
+point appears. The person then guesses. Ending that guessing is the first job
+of the setup page, and "причина 202" does not do it.
+
+So every disconnect code is classified into one cause a human can act on
+([`wifi_reason.h`](../src/wifi_reason.h)) - `password`, `not_found`,
+`dropped`, `other` - and the page prints the phrase while `GET /wifi` carries
+the key in `problem` and the raw code in `last_reason` beside it. The same
+words now go to the console, which is where the ESP8266 gains them: the core's
+own `disconnectReasonName()` exists only on the ESP32.
+
+**The split is by who is speaking, not by the meaning of each code.** Below 200
+the number comes from a deauth/disassoc frame the access point sent, and all it
+proves is that the link died: "authentication expired" is sent both by a router
+going down for a reboot and by one dropping a station that went quiet. Above
+200 the number comes from the station's own connect machine, which knows what
+it could not do - and those are trusted by name: 202 and 204 are the password,
+201 with 210-212 is "no such network on the air" (210-212 are what a router
+switched to WPA3-only or a signal below the threshold produce), 200 is a router
+that went silent. The one exception below 200 is 15, the four-way handshake,
+which is authoritative about the key.
+
+*Why not decide each code on its merits:* because the guesses cost more than
+they pay. Telling a person with the correct password that it is wrong makes
+them retype and save it, and the next attempt gives the authoritative code
+anyway. An unknown code is called `other`, not something confident.
+
+*And the signal has to be clean for any of this to be true.* Before every
+attempt the firmware tears the link down itself (`esp_wifi_disconnect()`), and
+the core answers that with reason 8, the same code a router uses to say
+goodbye. The first disconnect event after the firmware's own teardown is
+therefore dropped (`self_down_`), and `last_reason` is cleared when the board
+connects and when a new network is set - so `problem` is about the current
+network's current trouble and nothing else.
+
 ## The algorithm
 
 Timings, all in [`WifiPolicy::Config`](../src/wifi_policy.h):
@@ -379,16 +417,46 @@ dependency.
 pulse and fails if any ping waits longer than a second. `GET /wifi` on the bench
 board answers `state: online`, `mode: sta`, `fast: true`, `hw_error: false`.
 
-**The portal, walked by a second board:** `pytest Utils/hil --stand`, 8 tests,
-all green - the access point seen in a scan from another board and on the
-expected channel, the client counted by METF, the page and the captive redirect
-served, and a full change of network through the form, after which the board
+**The portal, walked by a second board:** `pytest Utils/hil --stand -k portal`,
+8 tests, all green - the access point seen in a scan from another board and on
+the expected channel, the client counted by METF, the page and the captive
+redirect served, and a full change of network through the form, after which the board
 came back to the bench network at the same address with `source: saved`. The
 stand is described in [Utils/hil/README.md](../Utils/hil/README.md).
 
-**Host tests:** `pio test -e native`, 50 test cases - 28 scenarios of the policy
+**The four troubles of a user.** Until now the failure paths were argued from
+the policy's host tests and from a made-up network name; nothing had taken a
+real network away from a running board. Two of them are now measured on the
+bench board (C6), with a second board with ESP-AT firmware reading the setup
+page from inside the board's own access point:
+
+| Staged | What the board did |
+|---|---|
+| the right network, the password mistyped | round of two attempts, then its own access point, ~25 s from the change; `problem: password` from `last_reason` **15** (four-way handshake), the page says «Неверный пароль» |
+| a network that is not on the air | the same ladder; `problem: not_found` from 201, the page says «Сеть не найдена». Restored through the page with `action=forget`, back on the bench network in under a minute |
+
+The three that need a network under someone's control - the router switched
+off and back on, rebooted, moved to another channel - are written as
+`Utils/hil/test_router.py` against a managed WT32-ETH01 (`esp32_nat_router`,
+console over the wire) and **have not been run yet**: the console password is
+not in `stand.ini` on this machine. They are the reason the file exists; until
+they run, those three rows of the promise rest on the host tests of the policy
+alone.
+
+**The bench link is weak, and it shows.** RSSI on the bench sits at -71 to -80
+dBm, and at that level `test/board` fails intermittently - about one test in
+every other run. Measured rather than guessed: 300 `/ping` requests at 100 ms
+gave a median of 11 ms with one or two answers of exactly 1015-1016 ms, which
+is one TCP retransmission timeout and not a stall in the firmware (ICMP over
+the same minute lost nothing, and a board that has been up for a while gives a
+worst case of 252-265 ms). The console caught the honest version of the same
+thing: a real `BEACON_TIMEOUT` at 20 s of uptime, three failed attempts, and
+the board back on the network 37 s later without raising its access point -
+which is exactly what P7 promises.
+
+**Host tests:** `pio test -e native`, 58 test cases - 28 scenarios of the policy
 on a virtual clock with a simulated radio, 12 of the LED rhythms, 10 of the NTP
-packet.
+packet, 8 of the disconnect-reason classification.
 
 ## Known gaps and non-goals
 
@@ -424,9 +492,11 @@ Listed so that an audit argues with a decision rather than discovering a hole.
    chosen channel (`follow_channel()`) or a radio that stops answering
    (`RestartRadio`). The policy side of the restart is covered by a host test;
    the radio side is not.
-7. **An access point raised on request cannot be lowered on request.** It goes
-   down by itself once nobody has been on it for ten minutes. There is no
-   `action=ap&value=0`, because nothing needed one yet.
+7. **The board's own access point is not hidden from the neighbours while it
+   probes.** It stays on the air between probes, so anyone in range sees a
+   `METF-XXXX` network even in the seconds when the board is off talking to the
+   router. Making it appear and disappear would be worse: a phone would lose the
+   page mid-form.
 8. **`forget` is reachable from the setup page without a confirmation.** One tap
    on "Сеть из прошивки" drops a saved network. The page is only reachable by
    somebody with physical proximity to the bench, and the network can be set

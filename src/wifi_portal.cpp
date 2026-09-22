@@ -2,6 +2,7 @@
 
 #include "http_util.h"
 #include "logging.h"
+#include "wifi_reason.h"
 
 using State = WifiPolicy::State;
 
@@ -55,6 +56,17 @@ String json_escape(const String &in) {
         }
     }
     return out;
+}
+
+/*
+Причина отказа - из фактов, которые отдала связь.
+
+Считается здесь, а не в WifiLink: там живут факты (есть связь, код ядра), а
+слова для человека - дело страницы. Пока плата в сети, прошлая причина -
+история, а не беда, и наружу она не идёт.
+*/
+WifiProblem problem_of(const WifiLink::Status &s) {
+    return s.connected ? WifiProblem::None : wifi_problem(s.last_reason);
 }
 
 // Уровень сигнала полосками, как в телефоне
@@ -160,10 +172,13 @@ void WifiPortal::on_page(AsyncWebServerRequest *request) {
     } else if (s.ssid.isEmpty()) {
         res->print(F("<div class=\"box bad\">Сеть не задана.</div>"));
     } else {
-        res->printf("<div class=\"box bad\">Нет связи с <b>%s</b>. Причина %d, неудачных попыток %u."
-                    "<br><small>Проверьте имя сети и пароль.</small></div>",
-                    html_escape(s.ssid).c_str(), s.last_reason,
-                    static_cast<unsigned>(s.failed_attempts));
+        const WifiProblem problem = problem_of(s);
+        res->printf("<div class=\"box bad\">Нет связи с <b>%s</b>. %s"
+                    "<br><small>Неудачных попыток %u, код %d.</small></div>",
+                    html_escape(s.ssid).c_str(),
+                    problem == WifiProblem::None ? "Причина пока неизвестна."
+                                                 : wifi_problem_text(problem),
+                    static_cast<unsigned>(s.failed_attempts), s.last_reason);
     }
     if (s.hw_error)
         res->print(F("<div class=\"box bad\">Ошибка железа: точка доступа или флеш. "
@@ -225,6 +240,9 @@ void WifiPortal::on_status(AsyncWebServerRequest *request) {
     out += ",\"offline_s\":" + String(s.offline_s);
     out += ",\"attempts\":" + String(s.failed_attempts);
     out += ",\"last_reason\":" + String(s.last_reason);
+    out += ",\"problem\":\"";
+    out += wifi_problem_key(problem_of(s));
+    out += "\"";
     out += ",\"scanning\":";
     out += s.scanning ? "true" : "false";
     out += ",\"hw_error\":";

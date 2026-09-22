@@ -1,14 +1,14 @@
 """
-Стенд METF: живая плата плюс AT-плата в роли телефона.
+Стенд METF: живая плата, управляемый роутер и AT-плата в роли телефона.
 
-Тесты идут по-настоящему: поднимают точку доступа, входят в неё с другой
-платы, открывают страницу настройки и меняют через неё сеть. Поэтому они не
-запускаются случайно - нужен ключ --stand.
+Тесты идут по-настоящему: гасят роутер, уводят его на другой канал, меняют
+на нём пароль, поднимают точку доступа платы и входят в неё с другой платы.
+Поэтому они не запускаются случайно - нужен ключ --stand.
 
     pytest Utils/hil --stand -v
 
-Адреса и порты - в stand.ini (см. stand.ini.example), сеть для возврата платы -
-оттуда же или из secrets.ini.
+Адреса, порты и пароли - в stand.ini (см. stand.ini.example), сеть для
+возврата платы - оттуда же или из secrets.ini.
 """
 
 from __future__ import annotations
@@ -20,16 +20,25 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from atboard import AtBoard  # noqa: E402
+import router as router_mod
+from atboard import AtBoard, AtError
 
 ROOT = Path(__file__).resolve().parents[2]
 HTTP_TIMEOUT = 5.0
+
+OWN_AP_HOST = '192.168.4.1'   # адрес платы в её собственной точке
+JOIN_S = 60.0                 # вход AT-платы в сеть: скан плюс ассоциация
+
+# Молчание платы - это состояние стенда, а не поломка теста: ждущий
+# цикл обязан его пережить, с какой бы стороны плата ни молчала
+TRANSPORT_ERRORS = (OSError, ValueError, AtError)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -78,35 +87,45 @@ def network(stand: configparser.ConfigParser) -> tuple[str, str]:
     return ssid, cfg.get('secrets', 'wifi_password', fallback='')
 
 
-class Metf:
-    """Плата по HTTP из сети стенда."""
+# ------------------------------------------------------------------ плата
 
-    def __init__(self, host: str) -> None:
-        self.host = host
 
-    def get(self, path: str, timeout: float = HTTP_TIMEOUT) -> str:
-        with urllib.request.urlopen(f'http://{self.host}{path}', timeout=timeout) as answer:
-            return answer.read().decode()
+@dataclass
+class Answer:
+    status: int
+    text: str
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+class Client:
+    """
+    Плата METF по HTTP - независимо от того, как до неё добираются.
+
+    Один и тот же разговор нужен с двух сторон: из сети стенда (рабочая
+    машина) и изнутри точки доступа платы или роутера (AT-плата). Ответы
+    платы и ожидания одинаковы, разный только транспорт - он и переопределяется
+    в наследнике.
+    """
+
+    host = ''
+
+    def get(self, path: str, timeout: float = HTTP_TIMEOUT) -> Answer:
+        raise NotImplementedError
+
+    def post(self, path: str, timeout: float = HTTP_TIMEOUT, **params: Any) -> Answer:
+        raise NotImplementedError
 
     def wifi(self) -> dict[str, Any]:
-        return json.loads(self.get('/wifi'))
-
-    def post(self, path: str, **params: Any) -> tuple[int, str]:
-        body = urllib.parse.urlencode(params).encode()
-        request = urllib.request.Request(f'http://{self.host}{path}', data=body, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
-                return answer.status, answer.read().decode()
-        except urllib.error.HTTPError as err:
-            return err.code, err.read().decode()
+        return json.loads(self.get('/wifi').text)
 
     def alive(self, timeout: float = 1.0) -> bool:
         try:
-            return self.get('/ping', timeout=timeout).strip() == 'pong'
-        except OSError:
+            return self.get('/ping', timeout=timeout).text.strip() == 'pong'
+        except TRANSPORT_ERRORS:
             return False
 
-    def wait_until(self, check, timeout: float, pause: float = 1.0, what: str = '') -> dict:
+    def wait_until(self, check: Callable[[dict], bool], timeout: float,
+                   pause: float = 1.0, what: str = '') -> dict[str, Any]:
         """Ждать состояния платы. Возвращает последний ответ /wifi."""
         deadline = time.monotonic() + timeout
         last: dict[str, Any] = {}
@@ -115,10 +134,58 @@ class Metf:
                 last = self.wifi()
                 if check(last):
                     return last
-            except OSError:
+            except TRANSPORT_ERRORS:
                 last = {}
             time.sleep(pause)
         raise AssertionError(f'плата не дождалась: {what or check}; последнее: {last}')
+
+
+class Metf(Client):
+    """Плата из сети стенда: обычный HTTP с рабочей машины."""
+
+    def __init__(self, host: str) -> None:
+        self.host = host
+
+    def get(self, path: str, timeout: float = HTTP_TIMEOUT) -> Answer:
+        return self._send(urllib.request.Request(f'http://{self.host}{path}'), timeout)
+
+    def post(self, path: str, timeout: float = HTTP_TIMEOUT, **params: Any) -> Answer:
+        body = urllib.parse.urlencode(params).encode()
+        request = urllib.request.Request(f'http://{self.host}{path}', data=body, method='POST')
+        return self._send(request, timeout)
+
+    @staticmethod
+    def _send(request: urllib.request.Request, timeout: float) -> Answer:
+        """Отказ - такая же часть протокола, как успех: 4xx возвращаем, не бросаем."""
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as answer:
+                return Answer(answer.status, answer.read().decode(), dict(answer.headers))
+        except urllib.error.HTTPError as err:
+            return Answer(err.code, err.read().decode(), dict(err.headers))
+
+
+class Phone(Client):
+    """
+    Плата изнутри сети, куда рабочей машине не попасть: через AT-плату.
+
+    Так тест видит METF, пока она сидит в собственной точке доступа или за
+    NAT управляемого роутера.
+    """
+
+    def __init__(self, board: AtBoard, host: str) -> None:
+        self.board = board
+        self.host = host
+
+    def get(self, path: str, timeout: float = 30.0) -> Answer:
+        return _answer(self.board.get(path, self.host, timeout=timeout))
+
+    def post(self, path: str, timeout: float = 30.0, **params: Any) -> Answer:
+        body = urllib.parse.urlencode(params).encode()
+        return _answer(self.board.post(path, self.host, body=body, timeout=timeout))
+
+
+def _answer(response: Any) -> Answer:
+    return Answer(response.status, response.text, response.headers)
 
 
 @pytest.fixture(scope='session')
@@ -142,3 +209,39 @@ def atboard(stand: configparser.ConfigParser) -> AtBoard:
         pytest.skip(f'AT-плата не открылась на {port}: {err}')
     yield board
     board.close()   # гасит радио: забытая станция греется и ищет точку вечно
+
+
+# ------------------------------------------------------------------ роутер
+
+
+@pytest.fixture(scope='session')
+def router(stand: configparser.ConfigParser):
+    """
+    Управляемый роутер. Снимок настроек снимается до тестов и возвращается
+    после: упавший тест иначе оставит стенд с погашенной точкой.
+    """
+    host = stand.get('router', 'host', fallback='')
+    if not host:
+        pytest.skip('нет [router] в stand.ini: беды роутера не проверить')
+    try:
+        device = router_mod.connect(host, stand.get('router', 'password', fallback=''),
+                                    stand.get('router', 'ap_password', fallback=''))
+        device.version()
+    except (OSError, router_mod.RouterError) as err:
+        pytest.skip(f'консоль роутера {host} не отвечает: {err}')
+
+    before = device.snapshot()
+    yield device
+    try:
+        device.restore(before)
+    finally:
+        device.close()
+
+
+@pytest.fixture(scope='session')
+def router_ap(router) -> tuple[str, str]:
+    """Имя и пароль точки управляемого роутера: сеть, которую тесты ломают."""
+    if not router.ap_password:
+        pytest.skip('нужен [router] ap_password в stand.ini: пароль точки '
+                    'у роутера не прочитать, show config печатает звёздочки')
+    return router.ap_ssid(), router.ap_password

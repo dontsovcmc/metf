@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 import time
 from dataclasses import dataclass, field
@@ -46,6 +47,7 @@ CHUNK = 1024                 # столько байт забираем за о�
 
 RE_STATE = re.compile(r'\+CWSTATE:(\d+)')
 RE_IP = re.compile(r'\+CIPSTA:ip:"([\d.]+)"')
+RE_STAMAC = re.compile(r'\+CIPSTAMAC:"([0-9a-fA-F:]{17})"')
 RE_RECVLEN = re.compile(r'\+CIPRECVLEN:(\d+)')
 # +CWLAP:(<ecn>,"<ssid>",<rssi>,"<mac>",<channel>,...); ecn=0 - открытая сеть
 RE_LAP = re.compile(r'\+CWLAP:\((\d+),"([^"]*)",(-?\d+),"[^"]*",(\d+)')
@@ -83,6 +85,7 @@ class AtBoard:
         self.ser = serial.Serial(port, baud, timeout=0.1)
         self.buf = b''
         self._passive = False
+        self._mac = ''
         time.sleep(0.3)
         self.ser.reset_input_buffer()
 
@@ -201,6 +204,18 @@ class AtBoard:
         self._ensure_passive()
         return self.ip()
 
+    def leave(self) -> None:
+        """
+        Выйти из сети, оставшись станцией.
+
+        Это не мелочь уборки: клиент на точке доступа METF означает для платы
+        «человек настраивает сеть», и пока он там, плата не делает проб -
+        десять минут (portal_idle_ms). Тест, забывший выйти, ждёт возвращения
+        платы в сеть, которого не будет.
+        """
+        with contextlib.suppress(AtError):
+            self.cmd('AT+CWQAP', timeout=5)
+
     def scan(self, timeout: float = 20.0) -> list[dict]:
         """
         Сети в эфире: AT+CWLAP. Нужен, чтобы доказать, что точка платы не просто
@@ -219,6 +234,20 @@ class AtBoard:
         if not m:
             raise AtError('плата не сообщила свой адрес')
         return m.group(1)
+
+    def mac(self) -> str:
+        """
+        Свой MAC. Им AT-плата отличает себя от METF в списке станций роутера:
+        адреса для этого не годятся - у точки роутера и у точки METF одна и та
+        же подсеть 192.168.4.0/24, и адреса в них совпадают.
+        """
+        if not self._mac:
+            self.cmd('AT+CWMODE=1')   # в null mode адреса у станции нет
+            m = RE_STAMAC.search(self.cmd('AT+CIPSTAMAC?'))
+            if not m:
+                raise AtError('плата не сообщила свой MAC')
+            self._mac = m.group(1).lower()
+        return self._mac
 
     # --- HTTP ---
 
@@ -253,10 +282,8 @@ class AtBoard:
         self._until((b'SEND OK',), 10)
 
         raw = self._receive(timeout)
-        try:
+        with contextlib.suppress(AtError):        # сервер обычно закрывает сам
             self.cmd('AT+CIPCLOSE', timeout=5)
-        except AtError:
-            pass                                  # сервер обычно закрывает сам
         return _parse(raw)
 
     def _receive(self, timeout: float) -> bytes:

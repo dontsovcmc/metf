@@ -42,8 +42,8 @@ Answers JSON. The password is never returned.
 ```json
 {"state":"online","mode":"sta","connected":true,"ssid":"lab","source":"build",
  "ip":"192.168.1.50","rssi":-68,"channel":4,"fast":true,"ap_ssid":"METF-AB12",
- "ap_up":false,"ap_clients":0,"offline_s":0,"attempts":0,"last_reason":0,"scanning":false,
- "hw_error":false,"pending":false}
+ "ap_up":false,"ap_clients":0,"offline_s":0,"attempts":0,"last_reason":0,"problem":"none",
+ "scanning":false,"hw_error":false,"pending":false}
 ```
 
 | Field | Meaning |
@@ -60,6 +60,7 @@ Answers JSON. The password is never returned.
 | `offline_s` | seconds since the network was lost (or since boot) |
 | `attempts` | failed connect attempts since the last success |
 | `last_reason` | disconnect reason code of the core |
+| `problem` | the same reason in words, for a human: `none`, `password` (the network did not accept the password), `not_found` (no such network on the air - switched off, renamed, out of range, or on a security mode the board cannot join), `dropped` (the link died on the router's side: powered off, rebooting, or too far), `other` (a code that says nothing certain). Always `none` while connected. The setup page shows the matching phrase instead of the code; how codes map to causes is [wifi.md, P9](wifi.md) |
 | `hw_error` | the access point did not start, or a flash write failed |
 | `scanning` | a scan is running: the radio is walking the channels, and everything the board answers - including NTP - waits for it |
 | `pending` | a command was accepted and `loop()` has not applied it yet |

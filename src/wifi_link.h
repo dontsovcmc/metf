@@ -150,7 +150,7 @@ private:
     void stop_ap();
     void follow_channel(uint32_t now);
     void on_connected();
-    void note_down(int reason, const char *name);
+    void note_down(int reason);
     void note_up();
 
     Config cfg_;
@@ -166,6 +166,14 @@ private:
 #endif
     std::atomic<bool> got_ip_{false};
     std::atomic<int> last_reason_{0};
+    /*
+    Разрыв по нашей же команде. Перед каждой попыткой связь обрывается
+    принудительно, и ядро отвечает на это событием с кодом 8 (ASSOC_LEAVE) -
+    тем же, каким прощается уходящий на перезагрузку роутер. Записать его в
+    last_reason_ значит соврать человеку о причине, поэтому первое событие
+    после нашего разрыва пропускается.
+    */
+    std::atomic<bool> self_down_{false};
     std::atomic<uint32_t> down_events_{0};
     uint32_t seen_down_events_ = 0;
 
