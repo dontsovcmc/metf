@@ -15,6 +15,11 @@ Action WifiPolicy::tick(uint32_t now, const Facts &f) {
         return enter_ap(now, true);
     }
 
+    if (pending_ap_off_) {
+        pending_ap_off_ = false;
+        ap_manual_ = false; // дальше решает общее правило
+    }
+
     if (pending_connect_) {
         pending_connect_ = false;
         started_ = true;

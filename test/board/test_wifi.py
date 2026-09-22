@@ -26,7 +26,7 @@ def test_wifi_status_has_no_password(board):
 def test_wifi_status_fields(board):
     st = board.get_json("/wifi")
     for key in ("mode", "ssid", "source", "rssi", "channel", "fast",
-                "ap_ssid", "ap_clients", "offline_s", "attempts",
+                "ap_ssid", "ap_up", "ap_clients", "offline_s", "attempts",
                 "last_reason", "hw_error", "pending", "scanning"):
         assert key in st, f"нет поля {key}: {st}"
     assert st["source"] in ("build", "saved"), st

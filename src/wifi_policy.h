@@ -76,8 +76,18 @@ public:
     // Новые креды: бросить всё и начать раунд сейчас, в обход пауз и клиентов AP
     void request_connect() { pending_connect_ = true; }
 
-    // Поднять точку сейчас (кнопка, HTTP)
-    void request_ap() { pending_ap_ = true; }
+    /*
+    Поднять точку сейчас (кнопка, HTTP) или объявить её ненужной.
+
+    request_ap(false) не гасит точку сам: он снимает с неё пометку «подняли
+    по просьбе», и дальше её гасит общее правило - когда плата в сети и на
+    точке никого нет. Гасить точку у платы, которая сети не нашла, нельзя:
+    другого пути к ней не останется.
+    */
+    void request_ap(bool on = true) {
+        pending_ap_ = on;
+        pending_ap_off_ = !on;
+    }
 
     // Человек на портале что-то сделал: пока он занят, пробы его не прерывают
     void portal_activity(uint32_t now_ms) {
@@ -127,4 +137,5 @@ private:
 
     bool pending_connect_ = false;
     bool pending_ap_ = false;
+    bool pending_ap_off_ = false;
 };

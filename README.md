@@ -24,7 +24,7 @@ The network from `secrets.ini` is the default one. If the board cannot reach it,
 
 The onboard LED says what is going on: blue blinking - connecting, blue steady - the access point is up and waiting, green with a beat - on the network, red - the network is lost or the hardware failed.
 
-Details: [docs/build.md](docs/build.md) for building and credentials, [docs/wifi.md](docs/wifi.md) for the network algorithm, its timings and what happens when the network disappears.
+Details: [docs/build.md](docs/build.md) for building and credentials, [docs/wifi.md](docs/wifi.md) for the network algorithm, its timings and what happens when the network disappears. The access point and the setup page are walked by a stand of their own - a second board plays the phone: [Utils/hil/README.md](Utils/hil/README.md).
 
 ## URLs
 

@@ -1,6 +1,6 @@
 # Testing
 
-Three layers, one directory per suite. Each PlatformIO env picks its own suite with `test_filter`, so a host suite is never uploaded and a board suite is never compiled without Arduino.
+Four layers, one directory per suite. Each PlatformIO env picks its own suite with `test_filter`, so a host suite is never uploaded and a board suite is never compiled without Arduino.
 
 ```bash
 # Host: NTP packets, the WiFi policy, the LED rhythms - no board needed
@@ -13,6 +13,10 @@ pio test -e nodemcuv2
 # Live board from the outside: pytest, standard library only (test/board)
 pytest test/board --metf-host <ip> -v
 pytest test/board --metf-host <ip> -k test_server_answers   # a single test
+
+# The stand: the board's own access point and the setup page in it, walked by a
+# second board that plays the phone (Utils/hil)
+pytest Utils/hil --stand -v
 ```
 
 - `test/test_board` asserts NodeMCU pin constants (`D0`, `D5`, `LED_BUILTIN == 2`), so it is a NodeMCU suite - it does not compile for `esp32-c6-super-mini`.
@@ -26,6 +30,7 @@ pytest test/board --metf-host <ip> -k test_server_answers   # a single test
   - `test/test_blinker` - the LED rhythms and the bench taking the LED over.
 - Fakes and simulators live beside the tests that use them, in `test/`, never in `src/`.
 - Code that should be host-tested must be pure C++ with no `Arduino.h` (`src/ntp_packet.h`, `src/wifi_policy.*`, `src/blinker.*`); the `native` env compiles exactly those sources (`build_src_filter`) and adds `-Isrc`.
+- `Utils/hil` is the fourth layer and the only one that enters the board's own access point: a NodeMCU with Espressif's ESP-AT firmware joins `METF-XXXX` over the air and walks the setup page, because the machine running the tests has one radio and it is busy with the bench network. What it covers and how the AT board is set up: [Utils/hil/README.md](../Utils/hil/README.md).
 - The client in `test/board/conftest.py` (`Board`: `get`, `get_json`, `post`) is the only Python client in this repository. The `ESPTestFramework` library shown in `README.md` lives elsewhere.
 
 ## Static analysis and warnings

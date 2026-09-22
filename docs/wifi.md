@@ -379,6 +379,13 @@ dependency.
 pulse and fails if any ping waits longer than a second. `GET /wifi` on the bench
 board answers `state: online`, `mode: sta`, `fast: true`, `hw_error: false`.
 
+**The portal, walked by a second board:** `pytest Utils/hil --stand`, 8 tests,
+all green - the access point seen in a scan from another board and on the
+expected channel, the client counted by METF, the page and the captive redirect
+served, and a full change of network through the form, after which the board
+came back to the bench network at the same address with `source: saved`. The
+stand is described in [Utils/hil/README.md](../Utils/hil/README.md).
+
 **Host tests:** `pio test -e native`, 50 test cases - 28 scenarios of the policy
 on a virtual clock with a simulated radio, 12 of the LED rhythms, 10 of the NTP
 packet.
@@ -387,13 +394,15 @@ packet.
 
 Listed so that an audit argues with a decision rather than discovering a hole.
 
-1. **The portal was not tried on a phone yet.** The access point, the page, the
-   API and the redirects were exercised over HTTP and the access point was seen
-   in a scan, but no iPhone or Android has opened the captive page on this
-   firmware. The sibling project (`esp32-opto`) has an open issue of exactly
-   this kind - its portal does not pop up on iPhone - and the two suspects it
-   names are avoided here: no `ON_AP_FILTER` on the handlers, and no JavaScript
-   on the page.
+1. **No real phone has opened the page.** Everything below it is covered: a
+   second board with Espressif's ESP-AT firmware joins the access point over
+   the air, walks the page, gets the captive redirect and sets a new network
+   through the form (`Utils/hil`, eight tests, all green). What that cannot
+   show is the part a phone does on its own - whether the captive window pops
+   up, and how the page looks in the cut-down browser it opens. The sibling
+   project (`esp32-opto`) has an open issue of exactly that kind, and the two
+   suspects it names are avoided here: no `ON_AP_FILTER` on the handlers, and
+   no JavaScript on the page.
 2. **The access point is open.** Anyone within range can change the network of a
    bench board while it is looking for its router. The bench is on a private
    network and the exposure lasts only while the router is unreachable, but this

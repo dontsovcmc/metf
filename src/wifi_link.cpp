@@ -199,7 +199,8 @@ void WifiLink::apply_commands(uint32_t now) {
         policy_.request_connect();
     }
 
-    if (take(pending_ap_)) policy_.request_ap();
+    if (take(pending_ap_)) policy_.request_ap(true);
+    if (take(pending_ap_off_)) policy_.request_ap(false);
     if (take(activity_)) policy_.portal_activity(now);
 }
 
@@ -475,7 +476,7 @@ void WifiLink::publish_status(uint32_t now, const WifiPolicy::Facts &f) {
     s.failed_attempts = policy_.failed_attempts();
     s.last_reason = last_reason_.load();
     s.pending = pending_set_.load() || pending_forget_.load() || pending_ap_.load() ||
-                pending_scan_.load();
+                pending_scan_.load() || pending_ap_off_.load();
 
     const std::lock_guard<Mutex> g(mtx_);
     status_ = s;

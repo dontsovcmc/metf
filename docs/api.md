@@ -42,7 +42,7 @@ Answers JSON. The password is never returned.
 ```json
 {"state":"online","mode":"sta","connected":true,"ssid":"lab","source":"build",
  "ip":"192.168.1.50","rssi":-68,"channel":4,"fast":true,"ap_ssid":"METF-AB12",
- "ap_clients":0,"offline_s":0,"attempts":0,"last_reason":0,"scanning":false,
+ "ap_up":false,"ap_clients":0,"offline_s":0,"attempts":0,"last_reason":0,"scanning":false,
  "hw_error":false,"pending":false}
 ```
 
@@ -56,7 +56,7 @@ Answers JSON. The password is never returned.
 | `ip` | address on the router, empty while not connected |
 | `rssi`, `channel` | signal and current radio channel |
 | `fast` | a channel/BSSID pair is saved, so the next connect skips the scan |
-| `ap_ssid`, `ap_clients` | the board's own access point and how many stations are on it |
+| `ap_ssid`, `ap_up`, `ap_clients` | the board's own access point: its name, whether it is on the air, and how many stations are on it |
 | `offline_s` | seconds since the network was lost (or since boot) |
 | `attempts` | failed connect attempts since the last success |
 | `last_reason` | disconnect reason code of the core |
@@ -70,7 +70,7 @@ Answers JSON. The password is never returned.
 |---|---|---|
 | `set` | `ssid` (1-32), `password` (empty or 8-63) | save the network and connect to it now. The saved network overrides the compiled one |
 | `forget` | - | erase the saved network and go back to the one from `secrets.ini` |
-| `ap` | - | raise the board's own access point now |
+| `ap` | `value` - `0` to drop it | raise the board's own access point now. `value=0` says it is no longer needed: it goes down once the board is on the network and nobody is connected to it |
 | `scan` | - | refresh the list of networks shown on the setup page. It takes the radio for a couple of seconds - watch `scanning` in `GET /wifi` and do not time anything else across it |
 
 Answers `202 accepted`: the command is applied from the main loop, not in the handler. Watch `GET /wifi` for the result - `pending` goes false once the loop has taken the command, and `state` changes when it has done its work.

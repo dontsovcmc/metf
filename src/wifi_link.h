@@ -105,7 +105,7 @@ public:
     // false - SSID 1..32, пароль пустой или 8..63; или прошлая команда ещё не исполнена
     bool request_set(const char *ssid, const char *pass);
     void request_forget() { pending_forget_.store(true); }
-    void request_ap() { pending_ap_.store(true); }
+    void request_ap(bool on = true) { (on ? pending_ap_ : pending_ap_off_).store(true); }
     void request_scan() { pending_scan_.store(true); }
     void portal_activity() { activity_.store(true); }
 
@@ -173,6 +173,7 @@ private:
     std::atomic<bool> pending_set_{false};
     std::atomic<bool> pending_forget_{false};
     std::atomic<bool> pending_ap_{false};
+    std::atomic<bool> pending_ap_off_{false};
     std::atomic<bool> pending_scan_{false};
     std::atomic<bool> activity_{false};
     char set_ssid_[WifiStore::kSsidMax + 1] = {};

@@ -219,7 +219,9 @@ void WifiPortal::on_status(AsyncWebServerRequest *request) {
     out += s.fast ? "true" : "false";
     out += ",\"ap_ssid\":\"";
     out += json_escape(s.ap_ssid);
-    out += "\",\"ap_clients\":" + String(s.ap_clients);
+    out += "\",\"ap_up\":";
+    out += s.ap_up ? "true" : "false";
+    out += ",\"ap_clients\":" + String(s.ap_clients);
     out += ",\"offline_s\":" + String(s.offline_s);
     out += ",\"attempts\":" + String(s.failed_attempts);
     out += ",\"last_reason\":" + String(s.last_reason);
@@ -277,7 +279,10 @@ void WifiPortal::on_command(AsyncWebServerRequest *request) {
     } else if (a == "forget") {
         link_.request_forget();
     } else if (a == "ap") {
-        link_.request_ap();
+        // value=0 - точка больше не нужна; гаснет она, когда плата в сети и
+        // на ней никого нет
+        const AsyncWebParameter *value = http::param_any(request, "value");
+        link_.request_ap(!value || value->value() != "0");
     } else if (a == "scan") {
         link_.request_scan();
     } else {
