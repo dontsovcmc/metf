@@ -404,7 +404,11 @@ void BenchRoutes::on_read_stat(AsyncWebServerRequest *request) {
 
 // GET /read - слить накопленные строки без добавления разделителей
 void BenchRoutes::on_read(AsyncWebServerRequest *request) {
-    AsyncResponseStream *res = request->beginResponseStream("text/plain; charset=utf-8");
+    // Буфер сразу на весь лог: по умолчанию он 1460 байт и на каждой добавке
+    // перекладывает всё, что уже накоплено, - на 64 КБ это десятки мегабайт
+    // копирования за один /read
+    AsyncResponseStream *res = request->beginResponseStream(
+        "text/plain; charset=utf-8", (size_t)ASB_MAX_LINES * ASB_MAX_LINE_LEN);
     asb_.drain_to(*res);
     request->send(res);
 }

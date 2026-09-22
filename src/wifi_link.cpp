@@ -1,5 +1,6 @@
 #include "wifi_link.h"
 
+#include <algorithm>
 #include <cstring>
 
 #ifdef ESP32
@@ -8,6 +9,7 @@
 #endif
 
 #include "logging.h"
+#include "timing.h"
 
 using Action = WifiPolicy::Action;
 using State = WifiPolicy::State;
@@ -22,6 +24,10 @@ constexpr uint32_t kReportPeriodMs = 60000;
 // за 200 мс UART испытуемого на 115200 приносит больше, чем держит буфер
 constexpr uint32_t kRadioOffMs = 200;
 
+// Снимок состояния для HTTP собираем не каждый проход: он стоит нескольких
+// вопросов к радио и пары строк, а меняется в нём раз в секунду
+constexpr uint32_t kStatusPeriodMs = 500;
+
 // Точка следует за каналом радио: несовпадение должно продержаться, а
 // переезды - не чаще. softAP() переинициализирует интерфейс и прерывает маяки
 constexpr uint32_t kChannelSettleMs = 3000;
@@ -29,33 +35,13 @@ constexpr uint32_t kChannelMoveEveryMs = 10000;
 
 constexpr uint8_t kApMaxClients = 4;
 
-bool elapsed(uint32_t now, uint32_t since, uint32_t period) {
-    return static_cast<uint32_t>(now - since) >= period;
-}
-
 bool valid_channel(int ch) { return ch >= 1 && ch <= 13; }
 
-// Снять флаг команды. Не exchange(): на ESP8266 нет атомарных
-// read-modify-write. Снимает только loop(), и повторная команда между load и
-// store сливается с первой - как и при exchange.
-bool take(std::atomic<bool> &flag) {
-    if (!flag.load()) return false;
-    flag.store(false);
-    return true;
-}
-
-// Канал, на котором сейчас радио, или 0
+// Канал, на котором сейчас радио, или 0. WiFi.channel() на обоих ядрах -
+// это и есть esp_wifi_get_channel (ESP32) / текущий канал станции (8266)
 uint8_t radio_channel() {
-#ifdef ESP32
-    uint8_t primary = 0;
-    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
-    if (esp_wifi_get_channel(&primary, &second) == ESP_OK && valid_channel(primary))
-        return primary;
-    return 0;
-#else
     const int ch = WiFi.channel();
     return valid_channel(ch) ? static_cast<uint8_t>(ch) : 0;
-#endif
 }
 
 const char *reason_name(int reason) {
@@ -157,6 +143,7 @@ void WifiLink::loop() {
         WiFi.mode(WIFI_STA);
         WiFi.setSleep(false);
         radio_off_ = false;
+        if (radio_off_ap_) start_ap(); // точку гасило выключение радио, а не политика
     }
 
     apply_commands(now);
@@ -164,6 +151,7 @@ void WifiLink::loop() {
     poll_scan();
 
     const bool ap_up = ap_active();
+    ap_up_.store(ap_up);
     WifiPolicy::Facts f;
     f.has_creds = !store_.creds().empty();
     f.has_fast = store_.fast().valid();
@@ -188,15 +176,12 @@ void WifiLink::loop() {
     failed_attempts_.store(policy_.failed_attempts());
 
     follow_channel(now);
+    publish_status(now, f);
 }
 
 void WifiLink::apply_commands(uint32_t now) {
     if (pending_set_.load()) {
-        bool ok = false;
-        {
-            const Guard g(mtx_);
-            ok = store_.save_creds(set_ssid_, set_pass_);
-        }
+        const bool ok = store_.save_creds(set_ssid_, set_pass_);
         if (!ok) {
             store_error_.store(true);
             LOG_ERROR("wifi: new network kept in RAM only, flash write failed");
@@ -208,12 +193,7 @@ void WifiLink::apply_commands(uint32_t now) {
     }
 
     if (take(pending_forget_)) {
-        bool ok = false;
-        {
-            const Guard g(mtx_);
-            ok = store_.forget();
-        }
-        if (!ok) store_error_.store(true);
+        if (!store_.forget()) store_error_.store(true);
         LOG_INFO("wifi: saved network forgotten, back to build network "
                  << (store_.creds().empty() ? "<none>" : store_.creds().ssid));
         policy_.request_connect();
@@ -259,17 +239,13 @@ void WifiLink::execute(Action action, uint32_t now) {
         break;
     case Action::RestartRadio:
         LOG_INFO("wifi: restarting radio");
+        radio_off_ap_ = ap_active(); // погаснет вместе с радио - поднимем заново
         WiFi.mode(WIFI_OFF);
         radio_off_ = true;
         radio_off_at_ = now;
         break;
     case Action::ForgetFast: {
-        bool ok = false;
-        {
-            const Guard g(mtx_);
-            ok = store_.clear_fast();
-        }
-        if (!ok) store_error_.store(true);
+        if (!store_.clear_fast()) store_error_.store(true);
         LOG_INFO("wifi: saved channel did not work twice, forgotten");
         break;
     }
@@ -318,9 +294,10 @@ void WifiLink::start_ap() {
     }
     WiFi.setSleep(false);
     ap_error_.store(false);
+    ap_channel_ = ch;
+    ap_ip_ = WiFi.softAPIP();
     LOG_INFO("wifi: own access point " << ap_ssid_ << " up, ch " << ch << ", open http://"
                                         << WiFi.softAPIP() << "/");
-    pending_scan_.store(true); // список сетей для страницы настройки
 }
 
 void WifiLink::stop_ap() {
@@ -339,10 +316,8 @@ void WifiLink::follow_channel(uint32_t now) {
         channel_mismatch_ = false;
         return;
     }
-    wifi_config_t cfg{};
-    if (esp_wifi_get_config(WIFI_IF_AP, &cfg) != ESP_OK) return;
     const uint8_t radio = radio_channel();
-    if (radio == 0 || radio == cfg.ap.channel) {
+    if (radio == 0 || radio == ap_channel_) {
         channel_mismatch_ = false;
         return;
     }
@@ -360,8 +335,9 @@ void WifiLink::follow_channel(uint32_t now) {
 
     // Радио ушло на канал роутера, а точка осталась на старом: маяки не идут,
     // хотя softAP() вернул true. Переносим точку туда, где радио.
-    LOG_INFO("wifi: own access point follows radio, ch " << cfg.ap.channel << " -> " << radio);
+    LOG_INFO("wifi: own access point follows radio, ch " << ap_channel_ << " -> " << radio);
     WiFi.softAP(ap_ssid_, nullptr, radio, 0, kApMaxClients);
+    ap_channel_ = radio;
     channel_moved_at_ = now;
     channel_mismatch_ = false;
 #else
@@ -379,12 +355,7 @@ void WifiLink::on_connected() {
     const uint8_t *bssid = WiFi.BSSID();
     if (bssid != nullptr) memcpy(f.bssid, bssid, sizeof(f.bssid));
     if (bssid != nullptr && f.valid() && !(f == store_.fast())) {
-        bool ok = false;
-        {
-            const Guard g(mtx_);
-            ok = store_.save_fast(f);
-        }
-        if (!ok) store_error_.store(true);
+        if (!store_.save_fast(f)) store_error_.store(true);
         LOG_INFO("wifi: channel " << f.channel << " saved for fast connect");
     }
 }
@@ -424,7 +395,7 @@ void WifiLink::poll_scan() {
         } else {
             continue;
         }
-        strncpy(found[at].ssid, ssid.c_str(), sizeof(found[at].ssid) - 1);
+        strlcpy(found[at].ssid, ssid.c_str(), sizeof(found[at].ssid));
         found[at].rssi = rssi;
         found[at].channel = static_cast<uint8_t>(WiFi.channel(i));
 #ifdef ESP32
@@ -435,21 +406,17 @@ void WifiLink::poll_scan() {
     }
     WiFi.scanDelete();
 
-    // Сильные сверху: вставками, сетей не больше kScanMax
-    for (int i = 1; i < count; i++)
-        for (int k = i; k > 0 && found[k].rssi > found[k - 1].rssi; k--) {
-            const ScanEntry t = found[k];
-            found[k] = found[k - 1];
-            found[k - 1] = t;
-        }
+    // Сильные сверху
+    std::sort(found, found + count,
+              [](const ScanEntry &a, const ScanEntry &b) { return a.rssi > b.rssi; });
 
-    const Guard g(mtx_);
+    const std::lock_guard<Mutex> g(mtx_);
     memcpy(scan_, found, sizeof(scan_));
     scan_count_ = count;
 }
 
 int WifiLink::scan_results(ScanEntry *out, int max) const {
-    const Guard g(mtx_);
+    const std::lock_guard<Mutex> g(mtx_);
     const int n = scan_count_ < max ? scan_count_ : max;
     memcpy(out, scan_, sizeof(ScanEntry) * n);
     return n;
@@ -460,39 +427,58 @@ int WifiLink::scan_results(ScanEntry *out, int max) const {
 bool WifiLink::request_set(const char *ssid, const char *pass) {
     if (!valid_ssid(ssid) || !valid_pass(pass)) return false;
     if (pending_set_.load()) return false;
-    strncpy(set_ssid_, ssid, sizeof(set_ssid_) - 1);
-    set_ssid_[sizeof(set_ssid_) - 1] = '\0';
-    strncpy(set_pass_, pass ? pass : "", sizeof(set_pass_) - 1);
-    set_pass_[sizeof(set_pass_) - 1] = '\0';
+    strlcpy(set_ssid_, ssid, sizeof(set_ssid_));
+    strlcpy(set_pass_, pass ? pass : "", sizeof(set_pass_));
     pending_set_.store(true); // после записи буферов: loop() прочтёт их целыми
     return true;
 }
 
 WifiLink::Status WifiLink::status() const {
+    const std::lock_guard<Mutex> g(mtx_);
+    return status_;
+}
+
+/*
+Снимок состояния для обработчиков HTTP.
+
+Собирается здесь, в loop(), потому что почти каждое поле - вопрос к радио,
+а задача сервера обслуживает все соединения платы: спрашивать радио оттуда
+значит занимать её на время ответа SDK.
+*/
+void WifiLink::publish_status(uint32_t now, const WifiPolicy::Facts &f) {
+    const bool changed = f.connected != status_.connected || f.ap_up != status_.ap_up ||
+                         f.ap_clients != status_.ap_clients ||
+                         policy_.state() != status_.state ||
+                         scan_running_.load() != status_.scanning;
+    if (!changed && !elapsed(now, status_at_, kStatusPeriodMs)) return;
+    status_at_ = now;
+
     Status s;
-    s.state = state_.load();
-    s.connected = connected_.load();
+    s.state = policy_.state();
+    s.connected = f.connected;
+    s.sta_up = (WiFi.getMode() & WIFI_STA) != 0;
     s.hw_error = hw_error();
-    {
-        const Guard g(mtx_);
-        s.ssid = store_.creds().ssid;
-        s.from_nvs = store_.creds().from_nvs;
-        s.fast = store_.fast().valid();
-    }
+    s.ssid = store_.creds().ssid;
+    s.from_nvs = store_.creds().from_nvs;
+    s.fast = store_.fast().valid();
     s.ap_ssid = ap_ssid_;
-    s.ap_up = ap_active();
-    s.ap_clients = s.ap_up ? WiFi.softAPgetStationNum() : 0;
-    s.ap_ip = WiFi.softAPIP();
-    if (s.connected) {
+    s.ap_up = f.ap_up;
+    s.ap_clients = f.ap_clients;
+    s.ap_ip = ap_ip_;
+    s.scanning = scan_running_.load();
+    if (f.connected) {
         s.ip = WiFi.localIP();
         s.rssi = static_cast<int8_t>(WiFi.RSSI());
     }
     s.channel = radio_channel();
-    s.offline_s = s.connected ? 0 : (millis() - down_since_.load()) / 1000;
-    s.failed_attempts = failed_attempts_.load();
+    s.offline_s = f.connected ? 0 : (now - down_since_.load()) / 1000;
+    s.failed_attempts = policy_.failed_attempts();
     s.last_reason = last_reason_.load();
-    s.pending = pending_set_.load() || pending_forget_.load();
-    return s;
+    s.pending = pending_set_.load() || pending_forget_.load() || pending_ap_.load() ||
+                pending_scan_.load();
+
+    const std::lock_guard<Mutex> g(mtx_);
+    status_ = s;
 }
 
 // ---------------------------------------------------------------- журнал

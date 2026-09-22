@@ -2,6 +2,7 @@
 
 #include "http_util.h"
 #include "logging.h"
+#include "utils.h"
 
 #if defined(ESP32) && defined(RGB_DEFAULT_PIN)
 #include "rgb_led_driver.h"
@@ -10,6 +11,9 @@
 #endif
 
 using Pattern = Blinker::Pattern;
+
+// Шаг сетевой части
+constexpr uint32_t kTickMs = 10;
 using State = WifiPolicy::State;
 
 namespace {
@@ -25,10 +29,8 @@ std::unique_ptr<LedDriver> make_led(uint8_t brightness) {
     return std::unique_ptr<LedDriver>(new RgbLedDriver<RGB_DEFAULT_PIN>(brightness));
 #elif defined(STATUS_LED_PIN)
     (void)brightness;
-#ifndef STATUS_LED_ACTIVE_LOW
-#define STATUS_LED_ACTIVE_LOW 1 // NodeMCU: светодиод на GPIO 2 горит от нуля
-#endif
-    return std::unique_ptr<LedDriver>(new GpioLedDriver(STATUS_LED_PIN, STATUS_LED_ACTIVE_LOW));
+    // NodeMCU: светодиод на GPIO 2 горит от нуля
+    return std::unique_ptr<LedDriver>(new GpioLedDriver(STATUS_LED_PIN, true));
 #else
     (void)brightness;
     return std::unique_ptr<LedDriver>(new NoLed());
@@ -37,12 +39,9 @@ std::unique_ptr<LedDriver> make_led(uint8_t brightness) {
 
 // "RRGGBB" -> цвет; false - не шесть шестнадцатеричных цифр
 bool parse_hex_color(const String &hex, Rgb &out) {
-    if (hex.length() != 6) return false;
-    for (const char c : hex)
-        if (!isxdigit(static_cast<unsigned char>(c))) return false;
-    const uint32_t v = strtoul(hex.c_str(), nullptr, 16);
-    out = Rgb{static_cast<uint8_t>(v >> 16), static_cast<uint8_t>(v >> 8),
-              static_cast<uint8_t>(v)};
+    uint8_t v[3] = {};
+    if (hex.length() != 6 || hexText2AsciiArray(hex, v, sizeof(v)) != sizeof(v)) return false;
+    out = Rgb{v[0], v[1], v[2]};
     return true;
 }
 
@@ -50,46 +49,52 @@ bool parse_hex_color(const String &hex, Rgb &out) {
 
 Connectivity::Connectivity(const Config &cfg)
     : cfg_(cfg), link_(cfg.wifi), portal_(link_), led_(make_led(cfg.status_brightness)),
-      blinker_(new Blinker(*led_)) {}
+      blinker_(*led_) {}
 
 void Connectivity::begin(AsyncWebServer &server) {
     led_->begin();
     show_status();
-    blinker_->loop(millis()); // синий - сразу, а не на первом loop()
+    blinker_.loop(millis()); // синий - сразу, а не на первом шаге loop() // синий - сразу, а не на первом loop()
 
     link_.begin();
-    portal_.attach(server);
+    portal_.attach(server); // вместе с onNotFound: редирект на страницу настройки
     attach_rgb(server);
-    server.onNotFound([this](AsyncWebServerRequest *request) {
-        if (!portal_.handle_not_found(request)) request->send(404, "text/plain", "Not found");
-    });
 }
 
 void Connectivity::loop() {
+    // Сеть и светодиод живут в масштабе сотен миллисекунд: политика считает
+    // секунды, самый частый ритм - 250 мс, кнопку держат три секунды. Опрашивать
+    // радио на каждом проходе loop() - это десятки тысяч вопросов SDK в секунду
+    // впустую; шаг в 10 мс ничего не меняет в поведении. Чтение UART испытуемого
+    // остаётся на полной скорости - оно в BenchRoutes.
+    const uint32_t now = millis();
+    if (!elapsed(now, tick_at_, kTickMs)) return;
+    tick_at_ = now;
+
     link_.loop();
     portal_.loop();
     show_status();
-    blinker_->loop(millis());
+    blinker_.loop(now);
 }
 
 void Connectivity::show_status() {
     if (link_.hw_error()) {
-        blinker_->set(Rgb::red(), Pattern::Slow);
+        blinker_.set(Rgb::red(), Pattern::Slow);
         return;
     }
     switch (link_.state()) {
     case State::Starting:
     case State::Connecting:
-        blinker_->set(Rgb::blue(), Pattern::Slow);
+        blinker_.set(Rgb::blue(), Pattern::Slow);
         break;
     case State::Ap:
-        blinker_->set(Rgb::blue(), Pattern::Solid);
+        blinker_.set(Rgb::blue(), Pattern::Solid);
         break;
     case State::Online:
-        blinker_->set(Rgb::green(), Pattern::Heartbeat);
+        blinker_.set(Rgb::green(), Pattern::Heartbeat);
         break;
     case State::Lost:
-        blinker_->set(Rgb::red(), Pattern::Fast);
+        blinker_.set(Rgb::red(), Pattern::Fast);
         break;
     }
 }
@@ -115,17 +120,15 @@ void Connectivity::attach_rgb(AsyncWebServer &server) {
         LOG_INFO("POST /rgb action=" << a);
 
         if (a == "begin") {
-            rgb_manual_.store(true);
             led_->set_brightness(manual_brightness_.load());
-            blinker_->hold(Rgb::off());
+            blinker_.hold(Rgb::off());
             request->send(200, "text/plain", "OK");
             return;
         }
         if (a == "status") {
-            rgb_manual_.store(false);
             led_->set_brightness(cfg_.status_brightness);
-            blinker_->release();
-            blinker_->refresh();
+            blinker_.release();
+            blinker_.refresh();
             request->send(200, "text/plain", "OK");
             return;
         }
@@ -133,7 +136,7 @@ void Connectivity::attach_rgb(AsyncWebServer &server) {
             http::send_400(request, http::Error::IncorrectValue, "action");
             return;
         }
-        if (!rgb_manual_.load()) {
+        if (!blinker_.held()) {
             http::send_500(request, "RGB not initialized. Call action=begin first");
             return;
         }
@@ -151,14 +154,14 @@ void Connectivity::attach_rgb(AsyncWebServer &server) {
             }
             manual_brightness_.store(static_cast<uint8_t>(v));
             led_->set_brightness(static_cast<uint8_t>(v));
-            blinker_->refresh();
+            blinker_.refresh();
         } else {
             Rgb c;
             if (!parse_hex_color(value->value(), c)) {
                 http::send_400(request, http::Error::IncorrectValue, "value");
                 return;
             }
-            blinker_->hold(c);
+            blinker_.hold(c);
         }
         request->send(200, "text/plain", "OK");
     });

@@ -5,6 +5,8 @@
 можно проверить, не трогая подключение.
 """
 
+import time
+
 
 def test_wifi_status_says_connected(board):
     """Плата, с которой мы говорим по сети, обязана считать себя в сети."""
@@ -25,7 +27,7 @@ def test_wifi_status_fields(board):
     st = board.get_json("/wifi")
     for key in ("mode", "ssid", "source", "rssi", "channel", "fast",
                 "ap_ssid", "ap_clients", "offline_s", "attempts",
-                "last_reason", "hw_error", "pending"):
+                "last_reason", "hw_error", "pending", "scanning"):
         assert key in st, f"нет поля {key}: {st}"
     assert st["source"] in ("build", "saved"), st
     assert 1 <= st["channel"] <= 13, st
@@ -66,5 +68,18 @@ def test_portal_page_is_served(board):
 
 
 def test_scan_command_accepted(board):
+    """Скан принимается - и плата сообщает, что он идёт и что кончился.
+
+    Дожидаться конца обязательно: пока радио ходит по каналам, ответы платы
+    (в том числе NTP соседних тестов) ждут, и следующий тест упал бы из-за
+    этого, а не из-за себя.
+    """
     code, _ = board.post_raw("/wifi", {"action": "scan"})
     assert code == 202
+
+    for _ in range(30):
+        if not board.get_json("/wifi")["scanning"]:
+            break
+        time.sleep(0.5)
+    else:
+        raise AssertionError("скан не закончился за 15 с")

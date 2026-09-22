@@ -9,7 +9,8 @@
 
 Потоки. loop() и всё, что трогает радио и флеш, - из loop(). Команды
 (request_*) и чтение состояния можно звать из обработчика HTTP: команды
-только ставят атомарный флаг, состояние собирается из атомарных полей.
+только ставят флаг, а status() отдаёт снимок, который loop() собрал за свой
+проход. Обработчик не трогает ни радио, ни флеш и не ждёт их.
 
 Почему переподключением владеет прошивка, а не ядро, какие особенности
 Espressif здесь учтены - docs/wifi.md.
@@ -27,6 +28,8 @@ Espressif здесь учтены - docs/wifi.md.
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #endif
+
+#include <mutex>
 
 #include "wifi_policy.h"
 #include "wifi_store.h"
@@ -46,9 +49,11 @@ public:
     struct Status {
         WifiPolicy::State state = WifiPolicy::State::Starting;
         bool connected = false;
+        bool sta_up = false; // станция включена (режим ap_sta, а не ap)
         bool from_nvs = false;
         bool fast = false;              // есть пара канал/BSSID
         bool hw_error = false;
+        bool scanning = false; // идёт скан: радио занято, ответы платы ждут
         String ssid;
         String ap_ssid;
         bool ap_up = false;
@@ -69,7 +74,9 @@ public:
         uint8_t channel;
         bool open;
     };
-    static constexpr int kScanMax = 16;
+    // Восемь сетей: список длиннее на телефоне всё равно не читают, а каждая
+    // запись лежит и в снимке, и на стеке у обоих читателей
+    static constexpr int kScanMax = 8;
 
     explicit WifiLink(const Config &cfg);
 
@@ -85,8 +92,13 @@ public:
     WifiPolicy::State state() const { return state_.load(); }
     // Точка не поднялась или флеш не записался
     bool hw_error() const { return ap_error_.load() || store_error_.load(); }
-    bool ap_active() const;
+
+    // Снимок, который собрал loop(); можно звать из обработчика HTTP
     Status status() const;
+
+    // Дёшево и без радио - для тех, кому это нужно каждый проход loop()
+    bool ap_up() const { return ap_up_.load(); }
+    IPAddress ap_ip() const { return ap_ip_; }
 
     // --- команды, можно из обработчика HTTP
 
@@ -100,9 +112,9 @@ public:
     static bool valid_ssid(const char *ssid);
     static bool valid_pass(const char *pass);
 
-    // Результат последнего скана: копия, до kScanMax сетей, сильные первыми
+    // Результат последнего скана: копия, до kScanMax сетей, сильные первыми.
+    // Идёт ли скан сейчас - в Status::scanning
     int scan_results(ScanEntry *out, int max) const;
-    bool scan_running() const { return scan_running_.load(); }
 
 private:
     /*
@@ -115,30 +127,19 @@ private:
     public:
 #ifdef ESP32
         Mutex() : h_(xSemaphoreCreateMutex()) {}
-        void lock() const { xSemaphoreTake(h_, portMAX_DELAY); }
-        void unlock() const { xSemaphoreGive(h_); }
+        void lock() { xSemaphoreTake(h_, portMAX_DELAY); }
+        void unlock() { xSemaphoreGive(h_); }
 
     private:
         SemaphoreHandle_t h_;
 #else
-        void lock() const {}
-        void unlock() const {}
+        void lock() {}
+        void unlock() {}
 #endif
     };
 
-    class Guard {
-    public:
-        explicit Guard(const Mutex &m) : m_(m) { m_.lock(); }
-        ~Guard() { m_.unlock(); }
-        Guard(const Guard &) = delete;
-        Guard &operator=(const Guard &) = delete;
-        Guard(Guard &&) = delete;
-        Guard &operator=(Guard &&) = delete;
-
-    private:
-        const Mutex &m_;
-    };
-
+    bool ap_active() const; // по железу, а не по своему флагу
+    void publish_status(uint32_t now, const WifiPolicy::Facts &f);
     void subscribe_events();
     void apply_commands(uint32_t now);
     void poll_button(uint32_t now);
@@ -177,7 +178,11 @@ private:
     char set_ssid_[WifiStore::kSsidMax + 1] = {};
     char set_pass_[WifiStore::kPassMax + 1] = {};
 
-    // --- состояние для status(), пишется из loop()
+    // --- состояние для status(): снимок собирает loop(), читают обработчики
+    Status status_;
+    uint32_t status_at_ = 0;
+    std::atomic<bool> ap_up_{false};
+    IPAddress ap_ip_;
     std::atomic<WifiPolicy::State> state_{WifiPolicy::State::Starting};
     std::atomic<bool> ap_error_{false};    // до следующего удачного softAP()
     std::atomic<bool> store_error_{false}; // до перезагрузки
@@ -188,11 +193,13 @@ private:
     bool was_connected_ = false;
     bool attempt_fast_ = false;
     bool radio_off_ = false;         // идёт перезапуск радио
+    bool radio_off_ap_ = false;      // до перезапуска точка была в эфире
     uint32_t radio_off_at_ = 0;
     uint32_t channel_mismatch_since_ = 0;
     uint8_t channel_mismatch_at_ = 0;
     bool channel_mismatch_ = false;
     uint32_t channel_moved_at_ = 0;
+    uint8_t ap_channel_ = 0; // канал, на котором мы подняли точку
 
     bool button_down_ = false;
     bool button_fired_ = false;
@@ -208,5 +215,7 @@ private:
     ScanEntry scan_[kScanMax] = {};
     int scan_count_ = 0;
 
-    Mutex mtx_; // scan_, scan_count_, store_.creds()
+    // Замок только на снимок и скан: под ним не бывает ни флеша, ни радио,
+    // поэтому обработчик HTTP ждёт на нём наносекунды
+    mutable Mutex mtx_;
 };

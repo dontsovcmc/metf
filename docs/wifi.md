@@ -80,7 +80,7 @@ once a minute, and the return is printed with the address that came back.
 Since protocol 9 the board also says it without a console: the LED shows the
 mode (blue blinking - connecting, blue steady - own access point, green with a
 beat - on the network, red - lost or broken), and `GET /wifi` answers the same
-in JSON. Every settled LED mode moves, so a frozen LED means frozen firmware.
+in JSON. All the LED modes blink except the steady blue of the access point, so on a board that is connecting, online or lost a frozen LED means frozen firmware.
 
 *Enforced:* `WifiLink::note_down()` / `note_up()` ([`src/wifi_link.cpp`](../src/wifi_link.cpp)),
 `Connectivity::show_status()` ([`src/connectivity.cpp`](../src/connectivity.cpp)),
@@ -121,7 +121,7 @@ So the firmware takes it over, in one place and completely:
 - [`WifiPolicy`](../src/wifi_policy.h) decides what to do next and nothing else:
   it takes the time and a handful of facts and answers with one action. It has
   no Arduino in it, so all of its timings are tested on a PC
-  ([`test/test_wifi_policy`](../test/test_wifi_policy), 23 scenarios).
+  ([`test/test_wifi_policy`](../test/test_wifi_policy), 28 scenarios).
 - [`WifiLink`](../src/wifi_link.h) reports the facts and carries out the
   actions. It is the only place that touches the radio.
 
@@ -357,12 +357,29 @@ a saved channel grows with the number of channels the scan has to walk and with
 how busy the air is. The reason the pair is kept is not only speed - it is that
 the first attempt after a power cut does not depend on a scan at all.
 
+**The status LED and responsiveness.** Driving the onboard WS2812B costs the
+bench its answers if it is done the usual way. Measured the same way each time:
+ten pulses of 2 s, `/ping` every 100 ms throughout, worst answer per run.
+
+| LED driver | Runs with an answer over 500 ms | Worst |
+|---|---|---|
+| FastLED 3.10 (`FastLED.show()`) | 1 of 8 | 1014 ms |
+| the LED frozen by `POST /rgb action=begin` | 0 of 8 | 33 ms |
+| the core's `rgbLedWrite()` (re-inits RMT per write) | 1 of 10 | 584 ms |
+| RMT initialised once, `rmtWriteAsync()` | 0 of 10 | 206 ms |
+
+The median was 11-14 ms in every case: what the driver costs is not throughput
+but rare, long stalls, exactly the kind `test_pulse.py` is there to catch - and
+it did catch them, as an intermittent failure of the branch that `master` does
+not show. The firmware now uses the last row, and FastLED is no longer a
+dependency.
+
 **Protocol and routes on a live board:** `pytest test/board --metf-host <ip>`,
-25 tests, all green, including `test_pulse`, which pings the board throughout a
+25 tests, four runs in a row all green, including `test_pulse`, which pings the board throughout a
 pulse and fails if any ping waits longer than a second. `GET /wifi` on the bench
 board answers `state: online`, `mode: sta`, `fast: true`, `hw_error: false`.
 
-**Host tests:** `pio test -e native`, 45 test cases - 23 scenarios of the policy
+**Host tests:** `pio test -e native`, 50 test cases - 28 scenarios of the policy
 on a virtual clock with a simulated radio, 12 of the LED rhythms, 10 of the NTP
 packet.
 

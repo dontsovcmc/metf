@@ -23,6 +23,7 @@ WifiLink здесь переводится в цвет и ритм Blinker, зд
 #include <memory>
 
 #include "blinker.h"
+#include "timing.h"
 #include "led_driver.h"
 #include "wifi_link.h"
 #include "wifi_portal.h"
@@ -56,9 +57,10 @@ private:
     WifiLink link_;
     WifiPortal portal_;
     std::unique_ptr<LedDriver> led_; // под плату; без светодиода - пустышка
-    std::unique_ptr<Blinker> blinker_;
+    Blinker blinker_;                // объявлен после led_: держит ссылку на него
 
-    // /rgb: стенд взял светодиод (action=begin), его яркость
-    std::atomic<bool> rgb_manual_{false};
+    // Яркость, которую стенд назначил через /rgb; у статуса своя
     std::atomic<uint8_t> manual_brightness_{255};
+
+    uint32_t tick_at_ = 0;
 };

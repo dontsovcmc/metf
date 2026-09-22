@@ -21,6 +21,8 @@
 
 #include <cstdint>
 
+#include "timing.h"
+
 class WifiPolicy {
 public:
     enum class State : uint8_t {
@@ -95,9 +97,6 @@ private:
     Action enter_ap(uint32_t now, bool manual);
     bool keep_manual_ap(uint32_t now, const Facts &f) const;
     bool portal_busy(uint32_t now, const Facts &f) const;
-    static bool elapsed(uint32_t now, uint32_t since, uint32_t period) {
-        return static_cast<uint32_t>(now - since) >= period;
-    }
 
     Config cfg_;
     State state_ = State::Starting;

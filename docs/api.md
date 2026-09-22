@@ -42,8 +42,8 @@ Answers JSON. The password is never returned.
 ```json
 {"state":"online","mode":"sta","connected":true,"ssid":"lab","source":"build",
  "ip":"192.168.1.50","rssi":-68,"channel":4,"fast":true,"ap_ssid":"METF-AB12",
- "ap_clients":0,"offline_s":0,"attempts":0,"last_reason":0,"hw_error":false,
- "pending":false}
+ "ap_clients":0,"offline_s":0,"attempts":0,"last_reason":0,"scanning":false,
+ "hw_error":false,"pending":false}
 ```
 
 | Field | Meaning |
@@ -61,6 +61,7 @@ Answers JSON. The password is never returned.
 | `attempts` | failed connect attempts since the last success |
 | `last_reason` | disconnect reason code of the core |
 | `hw_error` | the access point did not start, or a flash write failed |
+| `scanning` | a scan is running: the radio is walking the channels, and everything the board answers - including NTP - waits for it |
 | `pending` | a command was accepted and `loop()` has not applied it yet |
 
 ### POST /wifi
@@ -70,9 +71,9 @@ Answers JSON. The password is never returned.
 | `set` | `ssid` (1-32), `password` (empty or 8-63) | save the network and connect to it now. The saved network overrides the compiled one |
 | `forget` | - | erase the saved network and go back to the one from `secrets.ini` |
 | `ap` | - | raise the board's own access point now |
-| `scan` | - | refresh the list of networks shown on the setup page |
+| `scan` | - | refresh the list of networks shown on the setup page. It takes the radio for a couple of seconds - watch `scanning` in `GET /wifi` and do not time anything else across it |
 
-Answers `202 accepted`: the command is applied from the main loop, not in the handler. Watch `GET /wifi` for the result - `pending` goes false and `state` changes.
+Answers `202 accepted`: the command is applied from the main loop, not in the handler. Watch `GET /wifi` for the result - `pending` goes false once the loop has taken the command, and `state` changes when it has done its work.
 
 `set` with a bad `ssid` or `password` answers `400`, and a second `set` before the first is applied answers `409`.
 

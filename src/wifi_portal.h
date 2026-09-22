@@ -21,16 +21,15 @@ class WifiPortal {
 public:
     explicit WifiPortal(WifiLink &link) : link_(link) {}
 
-    // /, GET и POST /wifi, пробы captive-портала
+    // /, GET и POST /wifi, редирект клиентам точки (onNotFound)
     void attach(AsyncWebServer &server);
 
     // Из loop(): DNS отвечает, пока поднята точка
     void loop();
 
-    // Для onNotFound: клиенту точки - редирект на страницу, true; прочим - false
-    bool handle_not_found(AsyncWebServerRequest *request);
-
 private:
+    // Клиенту точки - редирект на страницу, true; прочим - false
+    bool handle_not_found(AsyncWebServerRequest *request);
     bool from_ap(AsyncWebServerRequest *request) const;
     void redirect_home(AsyncWebServerRequest *request) const;
     void on_page(AsyncWebServerRequest *request);

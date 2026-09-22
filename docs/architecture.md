@@ -13,7 +13,7 @@ Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP is ESP32-only
 | `WifiPolicy` | `src/wifi_policy.*` | time and facts; no Arduino at all | the radio, flash, HTTP |
 | `WifiStore` | `src/wifi_store.*` | `Preferences` (ESP32) or `EEPROM` (ESP8266) | the radio, HTTP |
 | `WifiLink` | `src/wifi_link.*` | `WiFi`, the policy, the store, the button | HTTP, the LED |
-| `WifiPortal` | `src/wifi_portal.*` | `WifiLink`, `AsyncWebServer`, `DNSServer` | the LED, `WiFi` directly |
+| `WifiPortal` | `src/wifi_portal.*` | `WifiLink`, `AsyncWebServer`, `DNSServer` | the LED, and the radio: it has no `WiFi.h` and no `#ifdef` for a platform |
 | `Blinker` | `src/blinker.*` | a `LedDriver`; no Arduino | the network, the server |
 | `RgbLedDriver`, `GpioLedDriver` | `src/rgb_led_driver.h`, `src/gpio_led_driver.h` | FastLED / `digitalWrite` | rhythms |
 | `Connectivity` | `src/connectivity.*` | all of the above; the facade | the bench routes |
@@ -154,9 +154,11 @@ The onboard LED shows what the firmware is doing. Four colours and rhythms, and 
 | network lost, reconnecting (the first two minutes) | red, 250 ms on / 250 ms off |
 | hardware error: the access point did not start, or flash would not take a write | red, 1 s on / 1 s off |
 
-Every settled mode moves, so a frozen picture means frozen firmware; the green heartbeat is there for exactly that. The rhythm is driven from `loop()`, so a blocked `loop()` shows up too.
+All of them blink except the steady blue of the access point, so on a board that is connecting, online or lost a frozen picture means frozen firmware; the green heartbeat is there for exactly that. The rhythm is driven from `loop()`, so a blocked `loop()` shows up too.
 
-`Blinker` holds the rhythms and knows nothing about the network - `Connectivity` translates `WifiLink`'s state into a colour and a pattern. The colour reaches the hardware through a `LedDriver`: `RgbLedDriver<PIN>` (WS2812B via FastLED, built with `-DRGB_DEFAULT_PIN=<pin>`; the pin is a template parameter because `FastLED.addLeds` takes it that way) or `GpioLedDriver` (a plain LED, built with `-DSTATUS_LED_PIN=<pin>`, any non-black colour means "lit"). A board with neither gets a driver that does nothing.
+`Blinker` holds the rhythms and knows nothing about the network - `Connectivity` translates `WifiLink`'s state into a colour and a pattern. The colour reaches the hardware through a `LedDriver`: `RgbLedDriver<PIN>` (WS2812B, built with `-DRGB_DEFAULT_PIN=<pin>`) or `GpioLedDriver` (a plain LED, built with `-DSTATUS_LED_PIN=<pin>`, any non-black colour means "lit"). A board with neither gets a driver that does nothing.
+
+The WS2812B is driven by the core's RMT, initialised once and written asynchronously - not by FastLED, and not by the core's own `rgbLedWrite()`. Both of those cost the bench its responsiveness: with FastLED, one run in eight had a request waiting about a second while a pulse was running; `rgbLedWrite()` re-initialises RMT on every write and still gave outliers of 250-580 ms. With RMT set up once and `rmtWriteAsync()`, ten runs gave no outlier above 210 ms, with a median of 12 ms. The measurement is in [wifi.md](wifi.md#measurements). FastLED is no longer a dependency.
 
 Status brightness is 24 of 255: the WS2812B on the SuperMini at full brightness is painful to look at.
 

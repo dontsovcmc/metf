@@ -1,31 +1,11 @@
 #include "wifi_portal.h"
 
-#ifdef ESP32
-#include <WiFi.h>
-#else
-#include <ESP8266WiFi.h>
-#endif
-
 #include "http_util.h"
 #include "logging.h"
 
 using State = WifiPolicy::State;
 
 namespace {
-
-// Адреса, которые телефоны и ноутбуки дёргают, чтобы понять, есть ли
-// интернет. Ответ-редирект вместо ожидаемого - и система сама открывает
-// страницу. Список - из портала Ватериуса, проверенного на живых телефонах.
-const char *const kCaptiveProbes[] = {
-    "/generate_204",        // Android
-    "/gen_204",             // Android
-    "/hotspot-detect.html", // Apple
-    "/library/test/success.html",
-    "/canonical.html", // Firefox
-    "/success.txt",    // Firefox
-    "/ncsi.txt",       // Windows
-    "/connecttest.txt", "/redirect", "/fwlink",
-};
 
 const char *state_name(State s) {
     switch (s) {
@@ -105,21 +85,28 @@ void WifiPortal::attach(AsyncWebServer &server) {
     server.on("/wifi", HTTP_GET, [this](AsyncWebServerRequest *r) { on_status(r); });
     server.on("/wifi", HTTP_POST, [this](AsyncWebServerRequest *r) { on_command(r); });
 
-    for (const char *uri : kCaptiveProbes) {
-        server.on(uri, HTTP_ANY, [this](AsyncWebServerRequest *r) {
-            if (!handle_not_found(r)) r->send(404, "text/plain", "Not found");
-        });
-    }
-    // Windows без ответа спрашивает его бесконечно
+    // Телефон, подключившись к точке, дёргает свой адрес-пробу
+    // (/generate_204, /hotspot-detect.html и прочие) и по ответу решает, есть
+    // ли интернет. Перечислять их не нужно: запрос, который не подошёл ни
+    // одному маршруту, сервер отдаёт сюда, а здесь клиент точки получает
+    // редирект на страницу - и система открывает её сама.
+    server.onNotFound([this](AsyncWebServerRequest *r) {
+        if (!handle_not_found(r)) r->send(404, "text/plain", "Not found");
+    });
+
+    // Кроме одного: без ответа на wpad.dat Windows спрашивает его бесконечно,
+    // а редирект её не устраивает
     server.on("/wpad.dat", HTTP_ANY,
               [](AsyncWebServerRequest *r) { r->send(404, "text/plain", "Not found"); });
 }
 
 void WifiPortal::loop() {
-    const bool ap = link_.ap_active();
+    const bool ap = link_.ap_up();
     if (ap && !dns_running_) {
         // На любое имя - адрес платы: так телефон попадает на страницу
-        dns_running_ = dns_.start(53, "*", WiFi.softAPIP());
+        dns_running_ = dns_.start(53, "*", link_.ap_ip());
+        // Точка только что поднялась: странице нужен список сетей
+        link_.request_scan();
     } else if (!ap && dns_running_) {
         dns_.stop();
         dns_running_ = false;
@@ -128,11 +115,11 @@ void WifiPortal::loop() {
 }
 
 bool WifiPortal::from_ap(AsyncWebServerRequest *request) const {
-    return link_.ap_active() && request->client()->localIP() == WiFi.softAPIP();
+    return link_.ap_up() && request->client()->localIP() == link_.ap_ip();
 }
 
 void WifiPortal::redirect_home(AsyncWebServerRequest *request) const {
-    request->redirect("http://" + WiFi.softAPIP().toString() + "/");
+    request->redirect("http://" + link_.ap_ip().toString() + "/");
 }
 
 bool WifiPortal::handle_not_found(AsyncWebServerRequest *request) {
@@ -149,10 +136,12 @@ void WifiPortal::on_page(AsyncWebServerRequest *request) {
 
     WifiLink::ScanEntry nets[WifiLink::kScanMax];
     const int n = link_.scan_results(nets, WifiLink::kScanMax);
-    const bool busy = s.pending || s.state == State::Connecting || s.state == State::Starting ||
-                      link_.scan_running();
+    const bool busy =
+        s.pending || s.scanning || s.state == State::Connecting || s.state == State::Starting;
 
-    AsyncResponseStream *res = request->beginResponseStream("text/html; charset=utf-8");
+    // Размер буфера задан сразу: по умолчанию он 1460 байт и растёт
+    // перекладыванием всего ответа на каждой добавке
+    AsyncResponseStream *res = request->beginResponseStream("text/html; charset=utf-8", 5120);
     res->print(FPSTR(kHead));
     // Пока плата подключается или ищет сети - страница обновляется сама
     if (busy) res->print(F("<meta http-equiv=\"refresh\" content=\"2\">"));
@@ -165,7 +154,7 @@ void WifiPortal::on_page(AsyncWebServerRequest *request) {
         res->printf("<div class=\"box ok\">В сети <b>%s</b><br>Адрес платы:<div class=\"ip\">%s</div>"
                     "<small>Стенд обращается к плате по этому адресу.</small></div>",
                     html_escape(s.ssid).c_str(), s.ip.toString().c_str());
-    } else if (busy && !link_.scan_running()) {
+    } else if (busy && !s.scanning) {
         res->printf("<div class=\"box\">Подключаюсь к <b>%s</b>…</div>",
                     html_escape(s.ssid).c_str());
     } else if (s.ssid.isEmpty()) {
@@ -183,7 +172,7 @@ void WifiPortal::on_page(AsyncWebServerRequest *request) {
     // --- форма
     res->print(F("<form method=\"post\" action=\"/wifi\"><input type=\"hidden\" name=\"ui\" value=\"1\">"
                  "<input type=\"hidden\" name=\"action\" value=\"set\"><h2>Сети рядом</h2>"));
-    if (link_.scan_running()) res->print(F("<p><small>Ищу сети…</small></p>"));
+    if (s.scanning) res->print(F("<p><small>Ищу сети…</small></p>"));
     for (int i = 0; i < n; i++) {
         const String name = html_escape(nets[i].ssid);
         res->printf("<label class=\"net\"><span><input type=\"radio\" name=\"ssid\" value=\"%s\"%s> %s%s</span>"
@@ -208,8 +197,7 @@ void WifiPortal::on_page(AsyncWebServerRequest *request) {
 
 void WifiPortal::on_status(AsyncWebServerRequest *request) {
     const WifiLink::Status s = link_.status();
-    const bool sta = (WiFi.getMode() & WIFI_STA) != 0;
-    const char *mode = s.ap_up ? (sta ? "ap_sta" : "ap") : "sta";
+    const char *mode = s.ap_up ? (s.sta_up ? "ap_sta" : "ap") : "sta";
 
     String out;
     out.reserve(360);
@@ -235,6 +223,8 @@ void WifiPortal::on_status(AsyncWebServerRequest *request) {
     out += ",\"offline_s\":" + String(s.offline_s);
     out += ",\"attempts\":" + String(s.failed_attempts);
     out += ",\"last_reason\":" + String(s.last_reason);
+    out += ",\"scanning\":";
+    out += s.scanning ? "true" : "false";
     out += ",\"hw_error\":";
     out += s.hw_error ? "true" : "false";
     out += ",\"pending\":";

@@ -19,6 +19,7 @@
 #include <cstdint>
 
 #include "led_driver.h"
+#include "timing.h"
 
 class Blinker {
 public:
@@ -38,6 +39,7 @@ public:
     // Ручной цвет поверх ритма; release() возвращает ритм
     void hold(Rgb color);
     void release();
+    // Светодиод держит кто-то снаружи (стенд через /rgb)
     bool held() const { return held_.load(); }
 
     // Показать заново тот же цвет: драйвер поменял яркость
@@ -45,9 +47,6 @@ public:
 
     // Из loop(): отправить в драйвер, если цвет сменился
     void loop(uint32_t now_ms);
-
-    Pattern pattern() const { return pattern_; }
-    Rgb color() const { return color_; }
 
 private:
     bool lit(uint32_t now_ms) const; // горит ли ритм в этот момент
@@ -66,8 +65,8 @@ private:
 
     std::atomic<bool> held_{false};
     std::atomic<uint32_t> held_color_{0};
-    std::atomic<bool> refresh_{false};
+    // true на старте: первый loop() обязан зажечь, каким бы ни был цвет
+    std::atomic<bool> refresh_{true};
 
-    Rgb shown_;
-    bool shown_valid_ = false; // в драйвер ещё ничего не уходило
+    Rgb shown_; // refresh_ с самого начала true, поэтому первый loop() покажет
 };
