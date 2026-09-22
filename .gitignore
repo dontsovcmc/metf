@@ -20,3 +20,7 @@ secrets.ini
 firmware/
 __pycache__/
 *.pyc
+
+# стенд: адреса и порты этой сборки
+Utils/hil/stand.ini
+Utils/hil/logs/

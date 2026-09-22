@@ -1,0 +1,32 @@
+# Статический анализ для pio check (см. docs/testing.md).
+# Отключено то, что на Arduino-коде даёт шум, а не находки: пины и тайминги -
+# «магические числа» по природе, буферы фиксированного размера - C-массивы.
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  readability-*,
+  modernize-*,
+  cppcoreguidelines-*,
+  -bugprone-easily-swappable-parameters,
+  -readability-magic-numbers,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-c-arrays,
+  -modernize-avoid-c-arrays,
+  -cppcoreguidelines-pro-bounds-*,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
+  -readability-implicit-bool-conversion,
+  -readability-uppercase-literal-suffix,
+  -modernize-macro-to-enum
+WarningsAsErrors: ''
+# Только свои заголовки. У библиотек в пути есть .pio/, у своих точек в
+# каталогах нет - на этом и держится фильтр (в LLVM regex нет lookahead).
+HeaderFilterRegex: '^[^.]*/(src|lib/[^/]+/src|test/[^/]+)/[^/]+$'
+FormatStyle: file
