@@ -1,6 +1,6 @@
 # HTTP API
 
-Protocol version **7** (`GET /version`). The board serves plain HTTP on port 80.
+Protocol version **9** (`GET /version`). The board serves plain HTTP on port 80.
 
 - POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string.
 - Numbers are decimal: `address=72`, not `0x48`.
@@ -16,9 +16,10 @@ Errors:
 | 404 | `Not found` | unknown URL or wrong method |
 | 409 | `pulse in progress` | `/pulse` on a pin whose own pulse is still running |
 | 503 | `no free pulse timer` | `/pulse` with all 8 pulse slots busy |
+| 409 | `previous command in progress` | `POST /wifi action=set` while the last one is not applied yet |
 | 500 | a description | hardware failure: I2C error, UDP port busy, RGB not initialised |
 
-Contents: [Service](#service) · [GPIO](#gpio) · [I2C](#i2c) · [Serial log](#serial-log) · [NTP server](#ntp-server) · [RGB LED](#rgb-led)
+Contents: [Service](#service) · [Network](#network) · [GPIO](#gpio) · [I2C](#i2c) · [Serial log](#serial-log) · [NTP server](#ntp-server) · [RGB LED](#rgb-led)
 
 ## Service
 
@@ -28,7 +29,60 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `8`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse.
+Answers the protocol version, e.g. `9`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action.
+
+## Network
+
+The board keeps its own network settings and can be moved to another router without reflashing: see [wifi.md](wifi.md) for the algorithm, the timings and the setup page.
+
+### GET /wifi
+
+Answers JSON. The password is never returned.
+
+```json
+{"state":"online","mode":"sta","connected":true,"ssid":"lab","source":"build",
+ "ip":"192.168.1.50","rssi":-68,"channel":4,"fast":true,"ap_ssid":"METF-AB12",
+ "ap_clients":0,"offline_s":0,"attempts":0,"last_reason":0,"hw_error":false,
+ "pending":false}
+```
+
+| Field | Meaning |
+|---|---|
+| `state` | `starting`, `connecting`, `online`, `lost`, `ap` |
+| `mode` | radio mode: `sta`, `ap`, `ap_sta` |
+| `connected` | the board has an IP on the router |
+| `ssid` | the network the board connects to |
+| `source` | `build` - from `secrets.ini`; `saved` - set through the portal or `action=set` |
+| `ip` | address on the router, empty while not connected |
+| `rssi`, `channel` | signal and current radio channel |
+| `fast` | a channel/BSSID pair is saved, so the next connect skips the scan |
+| `ap_ssid`, `ap_clients` | the board's own access point and how many stations are on it |
+| `offline_s` | seconds since the network was lost (or since boot) |
+| `attempts` | failed connect attempts since the last success |
+| `last_reason` | disconnect reason code of the core |
+| `hw_error` | the access point did not start, or a flash write failed |
+| `pending` | a command was accepted and `loop()` has not applied it yet |
+
+### POST /wifi
+
+| `action` | Fields | What the board does |
+|---|---|---|
+| `set` | `ssid` (1-32), `password` (empty or 8-63) | save the network and connect to it now. The saved network overrides the compiled one |
+| `forget` | - | erase the saved network and go back to the one from `secrets.ini` |
+| `ap` | - | raise the board's own access point now |
+| `scan` | - | refresh the list of networks shown on the setup page |
+
+Answers `202 accepted`: the command is applied from the main loop, not in the handler. Watch `GET /wifi` for the result - `pending` goes false and `state` changes.
+
+`set` with a bad `ssid` or `password` answers `400`, and a second `set` before the first is applied answers `409`.
+
+### GET /
+
+The setup page: current state, the networks the board can see, and a form for a new one. Plain HTML, no JavaScript, so that a phone's captive browser can use it. The page is served on both interfaces, so the network can also be changed from the bench.
+
+While the board is connecting or scanning the page refreshes itself every 2 seconds. Once connected it shows the new IP address in large type - the bench addresses the board by it.
+
+A client of the board's own access point that asks for any other URL gets a redirect to this page, which is what makes the phone open it by itself.
 
 ## GPIO
 
@@ -192,14 +246,17 @@ Counters are not reset by `stop`/`start`; compare values before and after.
 
 ## RGB LED
 
-ESP32 only, and only in firmware built with `RGB_DEFAULT_PIN` (the ESP32-C6 SuperMini build drives its onboard LED on GPIO 8).
+The onboard LED normally shows what the firmware is doing (colours and rhythms: [architecture.md](architecture.md#status-led)). `POST /rgb` takes it away from that and gives it to the bench.
+
+Built for the ESP32-C6 with `RGB_DEFAULT_PIN` (its onboard WS2812B on GPIO 8) and for a plain LED with `STATUS_LED_PIN` (the NodeMCU build drives GPIO 2, which has no colour: any non-black colour means "lit").
 
 ### POST /rgb
 
 | `action` | Fields | What the board does |
 |---|---|---|
-| `begin` | `pin`, `number` - accepted but ignored | initialise the strip and turn it off. Pin and LED count are fixed at build time (`RGB_DEFAULT_PIN`, `RGB_NUMBER`) |
-| `brightness` | `value` - 0-255 | set the brightness |
-| `color` | `value` - `RRGGBB` hex, e.g. `FF0000` | set every LED to this colour |
+| `begin` | `pin`, `number` - accepted but ignored | take the LED from the status display and turn it off. Pin and LED count are fixed at build time |
+| `brightness` | `value` - 0-255 | set the brightness of the bench's colour |
+| `color` | `value` - `RRGGBB` hex, e.g. `FF0000` | light this colour |
+| `status` | - | give the LED back to the status display |
 
-`brightness` and `color` before `begin` fail with `500 RGB not initialized. Call action=begin first`.
+`brightness` and `color` before `begin` fail with `500 RGB not initialized. Call action=begin first`. A reboot also returns the LED to the status display.
