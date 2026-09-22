@@ -10,16 +10,23 @@ esp32_nat_router, консоль по проводу), а не подсовыв�
 
 1. Набрал пароль с ошибкой - плата не молчит, а поднимает точку и пишет на
    странице «Неверный пароль».
-2. Сменил пароль на роутере - то же самое, но плата до этого была в сети.
-3. Выключил роутер и ушёл - плата поднимает точку, а когда роутер включают,
+2. Сменил пароль на роутере - плата, которая была в сети, через две минуты
+   поднимает точку, объясняет причину, и человек набирает новый пароль в ту же
+   форму; плата возвращается в сеть.
+3. Переименовал сеть - плата не находит её, а новое имя человек не набирает
+   вслепую: оно есть в списке сетей на странице, найденное сканом платы.
+4. Выключил роутер и ушёл - плата поднимает точку, а когда роутер включают,
    сама возвращается в сеть; руки для этого не нужны.
-4. Перезагрузил роутер - плата пережидает и возвращается, не поднимая точку:
+5. Перезагрузил роутер - плата пережидает и возвращается, не поднимая точку:
    короткий перерыв не повод звать человека.
-5. Роутер переехал на другой канал - плата находит сеть на новом канале.
+6. Роутер переехал на другой канал - плата находит сеть на новом канале.
 
 Плату, ушедшую к управляемому роутеру, рабочая машина не видит: она за NAT.
-Поэтому в ту же сеть входит AT-плата и спрашивает METF оттуда - тот же
-клиент, что играет телефон в тестах портала.
+Поэтому стенд просит роутер пробросить её порт наружу, на проводную сторону,
+и говорит с платой оттуда. Посредником в эфире это не делается сознательно:
+управляемый роутер стоит далеко, плата живёт на нём при -84 дБм, а телефон
+стенда (ESP8266) его и вовсе слышит через раз. AT-плата занята тем, что у неё
+получается отлично, - собственной точкой METF в двадцати сантиметрах.
 
 Два правила, без которых эти тесты врут.
 
@@ -56,7 +63,17 @@ AP_AFTER_LOST_S = 210.0
 # Возвращение в сеть: пробы идут раз в минуту, плюс сама попытка
 RETURN_S = 210.0
 
+# Сколько ждём, пока плата разберётся, в чём беда: причина уточняется от
+# попытки к попытке, а первым делом ядро говорит только «связь оборвалась»
+PROBLEM_S = 120.0
+SCAN_S = 60.0     # от «обновить список» до новой сети на странице
+
+# Порт на проводной стороне роутера, за которым видна плата, ушедшая за NAT
+PORTMAP_PORT = 8080
+
 WRONG_PASSWORD = 'metf-wrong-password'   # длина законная, пароль - нет
+NEW_PASSWORD = 'metf-stand-new-pass'     # его человек и набирает в портале
+NEW_SSID = 'metf-stand-renamed'          # имя, под которым точка «исчезает»
 
 
 class Roaming:
@@ -69,11 +86,17 @@ class Roaming:
     ищется заново.
     """
 
-    def __init__(self, metf: Metf, board: AtBoard, router, ap: tuple[str, str]) -> None:
+    def __init__(self, metf: Metf, board: AtBoard, router, ap: tuple[str, str],
+                 router_host: str, bench: tuple[str, str]) -> None:
         self.metf = metf
         self.board = board
         self.router = router
         self.ap_ssid, self.ap_password = ap
+        self.bench_ssid, self.bench_password = bench
+        # Адрес, по которому плата видна за NAT: проброс порта на проводной
+        # стороне роутера
+        self.through_router = Metf(f'{router_host}:{PORTMAP_PORT}')
+        self.mapped_ip = ''
         # Имя собственной точки платы: по нему она опознаётся и в эфире, и на
         # точке роутера. Снимаем, пока плата в сети стенда.
         self.own_ap = metf.wifi()['ap_ssid']
@@ -82,21 +105,25 @@ class Roaming:
     # --- сеть роутера ---
 
     def _ours(self, ip: str) -> Client | None:
-        """Станция с этим адресом - наша плата? Спрашиваем её саму."""
-        view = Phone(self.board, ip)
+        """
+        Станция с этим адресом - наша плата? Спрашиваем её саму.
+
+        Проброс порта переставляем на неё: адрес на точке роутера у платы
+        меняется от сеанса к сеансу, а порт снаружи остаётся один.
+        """
+        if ip != self.mapped_ip:
+            self.router.portmaps_clear()
+            self.router.portmap_add(PORTMAP_PORT, ip)
+            self.mapped_ip = ip
         try:
-            state = view.wifi()
-        except (AtError, OSError, ValueError):
+            state = self.through_router.wifi()
+        except (OSError, ValueError):
             return None
-        return view if state.get('ap_ssid') == self.own_ap else None
+        return self.through_router if state.get('ap_ssid') == self.own_ap else None
 
     def on_router_ap(self) -> Client | None:
         """Плата как клиент управляемого роутера - если она там и если это она."""
-        found = self.router.stations(skip=[self.at_mac])
-        if not found:
-            return None
-        self.join_router_ap()
-        for station in found:
+        for station in self.router.stations(skip=[self.at_mac]):
             view = self._ours(station['ip'])
             if view is not None:
                 return view
@@ -114,13 +141,6 @@ class Roaming:
                     f'плата не вернулась в сеть роутера за {timeout:.0f} с {what}')
             time.sleep(5.0)
 
-    def join_router_ap(self) -> None:
-        """Ввести AT-плату в сеть роутера: оттуда она видит METF за NAT."""
-        try:
-            self.board.join(self.ap_ssid, self.ap_password, timeout=JOIN_S)
-        except AtError as err:
-            raise AssertionError(f'AT-плата не вошла в сеть роутера: {err}') from err
-
     def move_to_router_ap(self) -> Client:
         """
         Перевести плату в сеть управляемого роутера.
@@ -129,12 +149,19 @@ class Roaming:
         Через неё и возвращаем потом - action=forget.
         """
         view = self.reach()
-        assert view.post('/wifi', action='set',
-                         ssid=self.ap_ssid, password=self.ap_password).status == 202
+        assert view.command('/wifi', action='set',
+                            ssid=self.ap_ssid, password=self.ap_password).status == 202
         return self.wait_on_router_ap(what='после сохранения сети роутера')
 
     def ensure_on_router_ap(self) -> Client:
-        """Плата в сети роутера - привести её туда, если она не там."""
+        """
+        Плата в сети роутера - привести её туда, если она не там.
+
+        Сперва уводим AT-плату из точки METF: клиент на точке и держит её
+        поднятой (`ap_stop_grace`), и глушит пробы. Прошлый тест мог оставить
+        там «телефон», и следующий увидел бы поднятую точку как беду.
+        """
+        self.leave_own_ap()
         view = self.on_router_ap()
         return view if view is not None else self.move_to_router_ap()
 
@@ -167,7 +194,7 @@ class Roaming:
 
     # --- общее ---
 
-    def reach(self, timeout: float = 60.0) -> Client:
+    def reach(self, timeout: float = 150.0) -> Client:
         """Дозваться платы с любой стороны. Для восстановления стенда."""
         if self.metf.alive(timeout=3):
             return self.metf
@@ -176,16 +203,27 @@ class Roaming:
             return view
         return self.enter_own_ap(timeout)
 
-    def back_to_bench(self) -> None:
-        """Вернуть плату на вкомпилированную сеть, откуда бы она ни была."""
-        self.reach().post('/wifi', action='forget')
+    def send_to_bench(self, view: Client) -> None:
+        """
+        Вернуть плату на вкомпилированную сеть через уже открытый вид на неё.
+
+        Тест, который менял настройки роутера, обязан увести плату отсюда до
+        того, как настройки вернут: иначе плата останется с сохранённым
+        паролем, которого у роутера уже нет, и следующий тест начнётся с
+        двухминутного ожидания её точки.
+        """
+        assert view.command('/wifi', action='forget').status == 202
         self.leave_own_ap()
         self.metf.wait_until(lambda w: w['connected'] and w['source'] == 'build',
                              RETURN_S, what='плата вернулась в сеть стенда')
 
+    def back_to_bench(self) -> None:
+        """Вернуть плату на вкомпилированную сеть, откуда бы она ни была."""
+        self.send_to_bench(self.reach())
+
 
 @pytest.fixture(scope='module')
-def roam(metf: Metf, atboard: AtBoard, router, router_ap) -> Roaming:
+def roam(metf: Metf, atboard: AtBoard, router, router_ap, stand, network) -> Roaming:
     """
     Кочующая плата на весь модуль.
 
@@ -193,7 +231,7 @@ def roam(metf: Metf, atboard: AtBoard, router, router_ap) -> Roaming:
     минуту, а промежуточное состояние следующему тесту не мешает - сохранение
     сети вытаскивает плату откуда угодно.
     """
-    device = Roaming(metf, atboard, router, router_ap)
+    device = Roaming(metf, atboard, router, router_ap, stand.get('router', 'host'), network)
     yield device
     device.back_to_bench()
 
@@ -206,9 +244,16 @@ def test_пароль_набран_с_ошибкой(roam: Roaming) -> None:
     не отличить опечатку от выключенного роутера. Плата поднимает свою точку
     (в сети она ещё не была - ждать две минуты незачем) и пишет причину
     словами: «Неверный пароль», а не «причина 202».
+
+    Сеть берём стендовую, а не управляемого роутера, и вот почему. Тот стоит
+    далеко: плата слышит его на -84 дБм и при неверном пароле сдаётся раньше
+    рукопожатия - ядро отдаёт 201 NO_AP_FOUND, и портал честно пишет «Сеть не
+    найдена». Отказ по паролю виден только там, где связь уверенная, - на
+    слабой связи «неверный пароль» неотличим от «сети нет», и это свойство
+    радио, а не прошивки.
     """
-    assert roam.reach().post('/wifi', action='set',
-                             ssid=roam.ap_ssid, password=WRONG_PASSWORD).status == 202
+    assert roam.reach().command('/wifi', action='set', ssid=roam.bench_ssid,
+                                password=WRONG_PASSWORD).status == 202
 
     portal = roam.enter_own_ap(AP_AFTER_TYPO_S)
     # Ждём конца раунда: точка могла остаться в эфире от прошлого теста, и
@@ -216,32 +261,86 @@ def test_пароль_набран_с_ошибкой(roam: Roaming) -> None:
     state = portal.wait_until(lambda w: w['state'] == 'ap' and w['attempts'] >= 2,
                               AP_AFTER_TYPO_S, what='раунд попыток кончился, точка поднята')
     assert state['connected'] is False
-    assert state['ssid'] == roam.ap_ssid, 'плата забыла, куда её послали'
+    assert state['ssid'] == roam.bench_ssid, 'плата забыла, куда её послали'
     assert state['source'] == 'saved'
     assert state['problem'] == 'password', f'причина разобрана неверно: {state}'
 
     assert 'Неверный пароль' in portal.get('/').text, 'страница не называет причину человеку'
 
+    # Возвращаем плату домой через портал - как это сделал бы человек
+    roam.send_to_bench(portal)
+
 
 def test_на_роутере_сменили_пароль(roam: Roaming) -> None:
     """
-    Плата была в сети, а пароль на роутере сменили.
+    Пароль сменили на роутере - и человек вводит новый в плату.
 
-    Отличие от опечатки - плата уже работала, и по правилу «две минуты без
-    сети» точка поднимается не сразу: короткий сбой не повод звать человека.
-    Когда пароль возвращают, плата возвращается сама.
+    Полный путь беды: плата работала, связь пропала, через две минуты без сети
+    поднялась точка (короткий сбой не повод звать человека), на странице
+    написано, что дело в пароле, человек набирает новый - и плата снова в
+    сети. Ровно это и делают, когда меняют пароль на роутере.
     """
     roam.ensure_on_router_ap()
 
-    with roam.router.password(WRONG_PASSWORD):
+    with roam.router.password(NEW_PASSWORD) as ssid:
         portal = roam.enter_own_ap(AP_AFTER_LOST_S)
-        state = portal.wait_until(lambda w: w['problem'] == 'password', 90.0,
+        state = portal.wait_until(lambda w: w['problem'] == 'password', PROBLEM_S,
                                   what='плата поняла, что дело в пароле')
         assert state['connected'] is False
         assert 'Неверный пароль' in portal.get('/').text
-        roam.leave_own_ap()      # человек ушёл, пробы возобновляются
 
-    roam.wait_on_router_ap(what='после возврата пароля')
+        # Человек набирает новый пароль в ту же форму, что и на телефоне
+        answer = portal.post('/wifi', ui='1', action='set', ssid=ssid, password=NEW_PASSWORD)
+        assert answer.status in (200, 202, 302, 303), answer.text[:200]
+        roam.leave_own_ap()      # человек ушёл со страницы
+
+        view = roam.wait_on_router_ap(what='с новым паролем')
+        back = view.wait_until(lambda w: w['connected'], 60.0, what='плата снова в сети')
+        assert back['ssid'] == ssid
+        assert back['problem'] == 'none', 'плата в сети, а причина отказа не убрана'
+
+        # Увести плату домой, пока пароль на роутере ещё новый: иначе она
+        # останется с паролем, которого у роутера уже нет
+        roam.send_to_bench(view)
+
+
+def test_на_роутере_сменили_имя_сети(roam: Roaming) -> None:
+    """
+    Точку переименовали - для платы сеть просто исчезла.
+
+    Человеку это чинится только через портал, и именно так, как задумано:
+    новое имя он не набирает вслепую, а видит в списке сетей на странице -
+    его плата нашла сканом. Выбрал, ввёл пароль - и снова в сети.
+    """
+    roam.ensure_on_router_ap()
+
+    with roam.router.renamed(NEW_SSID) as ssid:
+        portal = roam.enter_own_ap(AP_AFTER_LOST_S)
+        state = portal.wait_until(lambda w: w['problem'] == 'not_found', PROBLEM_S,
+                                  what='плата поняла, что прежней сети нет в эфире')
+        assert state['connected'] is False
+        assert 'Сеть не найдена' in portal.get('/').text
+
+        # «Обновить список» на странице - и новое имя должно в нём появиться
+        portal.post('/wifi', ui='1', action='scan')
+        deadline = time.time() + SCAN_S
+        while ssid not in portal.get('/').text:
+            assert time.time() < deadline, (
+                f'новое имя {ssid} не появилось в списке сетей на странице - '
+                'человеку не из чего выбирать')
+            time.sleep(3.0)
+
+        answer = portal.post('/wifi', ui='1', action='set', ssid=ssid,
+                             password=roam.ap_password)
+        assert answer.status in (200, 202, 302, 303), answer.text[:200]
+        roam.leave_own_ap()
+
+        view = roam.wait_on_router_ap(what='с новым именем сети')
+        back = view.wait_until(lambda w: w['connected'], 60.0, what='плата снова в сети')
+        assert back['ssid'] == ssid
+        assert back['problem'] == 'none'
+
+        roam.send_to_bench(view)
 
 
 def test_роутер_выключили_и_включили(roam: Roaming) -> None:

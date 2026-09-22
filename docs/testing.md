@@ -15,9 +15,9 @@ pytest test/board --metf-host <ip> -v
 pytest test/board --metf-host <ip> -k test_server_answers   # a single test
 
 # The stand: the board's own access point and the setup page in it, walked by a
-# second board that plays the phone, plus the four troubles a managed router can
-# cause on purpose - a wrong password, a moved channel, a reboot, no network at
-# all (Utils/hil)
+# second board that plays the phone, plus the six troubles a managed router can
+# cause on purpose - a mistyped password, a password or a name changed on the
+# router, a reboot, a moved channel, no network at all (Utils/hil)
 pytest Utils/hil --stand -v
 pytest Utils/hil --stand -v -k router        # only the router troubles, minutes
 pytest Utils/hil --stand -m "not slow"       # only what takes seconds
@@ -35,7 +35,7 @@ pytest Utils/hil --stand -m "not slow"       # only what takes seconds
   - `test/test_wifi_reason` - the core's disconnect code turned into the cause a human reads: a password that was not accepted, a network that is not on the air, a router that went quiet.
 - Fakes and simulators live beside the tests that use them, in `test/`, never in `src/`.
 - Code that should be host-tested must be pure C++ with no `Arduino.h` (`src/ntp_packet.h`, `src/wifi_policy.*`, `src/blinker.*`, `src/wifi_reason.*`); the `native` env compiles exactly those sources (`build_src_filter`) and adds `-Isrc`.
-- `Utils/hil` is the fourth layer, and the only one that can both enter the board's own access point and break the network under the board. A NodeMCU with Espressif's ESP-AT firmware joins `METF-XXXX` over the air and walks the setup page, because the machine running the tests has one radio and it is busy with the bench network; a managed router (WT32-ETH01, `esp32_nat_router`, console over the wire) changes its password, moves to another channel, reboots and goes off the air, so the four troubles a user meets are staged for real instead of being imitated with a made-up network name. What it covers and how both boards are set up: [Utils/hil/README.md](../Utils/hil/README.md).
+- `Utils/hil` is the fourth layer, and the only one that can both enter the board's own access point and break the network under the board. A NodeMCU with Espressif's ESP-AT firmware joins `METF-XXXX` over the air and walks the setup page, because the machine running the tests has one radio and it is busy with the bench network; a managed router (WT32-ETH01, `esp32_nat_router`, console over the wire) changes its password and its name, moves to another channel, reboots and goes off the air, so the troubles a user meets are staged for real instead of being imitated with a made-up network name - including the recovery: the phone types the new password into the page and the board comes back. What it covers and how both boards are set up: [Utils/hil/README.md](../Utils/hil/README.md).
 - The client in `test/board/conftest.py` (`Board`: `get`, `get_json`, `post`) is the only Python client in this repository. The `ESPTestFramework` library shown in `README.md` lives elsewhere.
 
 ## Static analysis and warnings

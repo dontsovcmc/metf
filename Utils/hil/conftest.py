@@ -124,6 +124,24 @@ class Client:
         except TRANSPORT_ERRORS:
             return False
 
+    def command(self, path: str, tries: int = 3, **params: Any) -> Answer:
+        """
+        Команда плате, с повторами.
+
+        Одиночный запрос к живой плате - ненадёжный факт: она может в этот
+        момент сканировать эфир или переподключаться, и ответ не успеет. Отказ
+        по существу (400) при этом возвращается как есть - повторять его незачем.
+        """
+        last: Exception | None = None
+        for attempt in range(tries):
+            try:
+                return self.post(path, **params)
+            except TRANSPORT_ERRORS as err:
+                last = err
+                if attempt + 1 < tries:
+                    time.sleep(2.0)
+        raise AssertionError(f'плата не приняла команду {params}: {last}')
+
     def wait_until(self, check: Callable[[dict], bool], timeout: float,
                    pause: float = 1.0, what: str = '') -> dict[str, Any]:
         """Ждать состояния платы. Возвращает последний ответ /wifi."""
@@ -231,6 +249,13 @@ def router(stand: configparser.ConfigParser):
         pytest.skip(f'консоль роутера {host} не отвечает: {err}')
 
     before = device.snapshot()
+    # Телефон стенда - ESP8266, и в совмещённый режим WPA2/WPA3 он не заходит:
+    # точка требует PMF, которого у него нет. Ставим wpa2 на время прогона,
+    # прежний режим вернёт restore().
+    if device.ap_auth() != 'wpa2':
+        device.set_ap_auth('wpa2')
+        device.restart()
+
     yield device
     try:
         device.restore(before)

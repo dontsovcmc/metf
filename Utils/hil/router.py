@@ -17,7 +17,12 @@
 * Сразу действует только `ap enable/disable`. `set_ap` и `set_ap_channel`
   ложатся в NVS, а в эфир выходят после `restart`.
 * Перезагрузка рвёт сетевую консоль - это не ошибка, а норма: сокет умирает
-  вместе с платой. На этом же и проверяется, что перезагрузка случилась.
+  вместе с платой, и его надо поднимать заново. А случилась ли перезагрузка,
+  видно по аптайму: плата исчезает молча, не закрывая соединение, и запись в
+  такой сокет проходит успешно.
+* Точка живёт в режиме WPA2/WPA3, а ESP8266 не умеет PMF: телефон стенда в
+  такую точку не заходит. Стенд ставит wpa2 на время прогона и возвращает
+  прежний режим за собой.
 * Успех команды проверяется по состоянию роутера (`show`), а не по тексту
   ответа: текст свободный, а неузнанный аргумент прошивка иногда проглатывает
   молча.
@@ -43,8 +48,6 @@ SHOW_TIMEOUT = 6.0
 # Перезагрузка: консоль отвечает через 5-6 с, клиент выходит наружу через 7-9 с
 # (замеры стенда Ватериуса, 03_router-nat-bug.md). 12 с - с запасом.
 RESTART_WAIT = 12.0
-# За столько консоль обязана замолчать, если плата и правда ушла в ребут
-RESTART_DIES_IN = 8.0
 
 ERROR_MARKERS = (
     'Unrecognized command',
@@ -100,16 +103,6 @@ class Console:
                 if time.time() > deadline:
                     raise
                 time.sleep(2.0)
-
-    def alive(self) -> bool:
-        """Жив ли сокет: перезагрузка платы его рвёт, и это наш признак ребута."""
-        if self._sock is None:
-            return False
-        try:
-            self._sock.sendall(b'\r\n')
-            return True
-        except OSError:
-            return False
 
     def _send(self, line: str) -> None:
         assert self._sock is not None
@@ -187,6 +180,7 @@ class Router:
         # Трогали ли мы точку: снимок настроек про пароль ничего не знает, и
         # вернуть его можно только по этой памятке
         self._ap_dirty = False
+        self._ports: set[tuple[int, str, int]] = set()
 
     # --- основа ---
 
@@ -218,6 +212,29 @@ class Router:
     def ap_channel(self) -> int:
         """Канал из настроек. В эфир он выходит только после restart()."""
         return _number(self.config().get('channel', ''), default=0)
+
+    def ap_auth(self) -> str:
+        """Режим защиты точки, как его принимает set_ap_auth: wpa2, wpa3, wpa2wpa3."""
+        return self.config().get('security', '').replace('/', '').lower() or 'wpa2'
+
+    def set_ap_auth(self, mode: str) -> None:
+        """
+        Режим защиты точки. В эфир выходит после restart().
+
+        Стенду нужен wpa2: в совмещённом режиме WPA2/WPA3 точка требует PMF, а
+        ESP8266 его не умеет - AT-плата ассоциируется и тут же отваливается
+        («WIFI CONNECTED / WIFI DISCONNECT», +CWJAP:3). METF на ESP32 заходит
+        в оба режима, но телефон стенда - нет.
+        """
+        self._ap_dirty = True
+        self.cmd(f'set_ap_auth {mode}')
+
+    def uptime_s(self) -> int:
+        """Сколько роутер на ногах. По этому и видно, что перезагрузка случилась."""
+        m = re.search(r'Uptime:\s*(\d+):(\d\d):(\d\d)', self.show('status'))
+        if not m:
+            raise RouterError('роутер не сообщил аптайм (show status)')
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
 
     # --- точка доступа ---
 
@@ -254,22 +271,33 @@ class Router:
 
         Факт перезагрузки проверяется, а не предполагается: `set_ap` и
         `set_ap_channel` без неё остаются в NVS, и тест, поверивший на слово,
-        ищет беду, которой не случилось. Признак - смерть сокета: команда
-        уходит по сети, и сеть умирает вместе с платой.
+        ищет беду, которой не случилось.
+
+        Судим по аптайму, который роутер печатает сам. Смерть сокета для этого
+        не годится: плата исчезает молча, не закрывая соединение, и запись в
+        такой сокет проходит успешно - данные просто уходят в буфер.
+
+        Сравниваем не с прежним аптаймом, а с тем, каким он стал бы без
+        перезагрузки: команда, отданная сразу после прошлого ребута, иначе
+        выглядит невыполненной - аптайм-то вырос.
         """
-        with contextlib.suppress(OSError):   # плата успела уйти в перезагрузку
-            self._c.write_line('restart')
+        for attempt in range(2):
+            before = self.uptime_s()
+            started = time.monotonic()
+            with contextlib.suppress(OSError):   # плата успела уйти в перезагрузку
+                self._c.write_line('restart')
 
-        deadline = time.time() + RESTART_DIES_IN
-        while self._c.alive():
-            if time.time() > deadline:
-                raise RouterError('роутер не перезагрузился: консоль отвечает как ни в чём '
-                                  'не бывало, а настройки без ребута остаются в NVS')
-            time.sleep(0.5)
-
-        time.sleep(wait)
-        self._c.reconnect()
-        self.version()      # консоль отвечает, а не просто принимает соединение
+            time.sleep(wait)
+            self._c.reconnect()
+            after = self.uptime_s()
+            without_reboot = before + int(time.monotonic() - started)
+            if after < without_reboot - 5:
+                return
+            if attempt == 0:
+                continue                 # команда не дошла - повторяем один раз
+            raise RouterError(f'роутер не перезагрузился: аптайм {after} с там же, где был бы '
+                              f'без ребута ({without_reboot} с), а настройки без него '
+                              'остаются в NVS')
 
     # --- клиенты ---
 
@@ -286,6 +314,30 @@ class Router:
             if m and m.group(1).lower() not in ignore:
                 found.append({'mac': m.group(1).lower(), 'ip': m.group(2)})
         return found
+
+    # --- проброс порта ---
+
+    def portmap_add(self, ext_port: int, ip: str, int_port: int = 80) -> None:
+        """
+        Пробросить порт клиента точки на проводную сторону роутера.
+
+        Так рабочая машина говорит с платой, ушедшей за NAT, напрямую - без
+        посредника в эфире. Для стенда это не удобство, а необходимость:
+        телефон стенда (ESP8266) эту точку слышит через раз, а плата на ней
+        живёт при -84 дБм.
+        """
+        self._ports.add((ext_port, ip, int_port))
+        self.cmd(f'portmap add TCP {ext_port} {ip} {int_port} ETH')
+
+    def portmap_del(self, ext_port: int, ip: str, int_port: int = 80) -> None:
+        with contextlib.suppress(RouterError):
+            self.cmd(f'portmap del TCP {ext_port} {ip} {int_port} ETH')
+        self._ports.discard((ext_port, ip, int_port))
+
+    def portmaps_clear(self) -> None:
+        """Убрать за собой все свои пробросы."""
+        for mapping in list(self._ports):
+            self.portmap_del(*mapping)
 
     # --- сценарии ---
 
@@ -319,7 +371,7 @@ class Router:
 
     @contextmanager
     def password(self, new: str) -> Iterator[str]:
-        """Пароль точки сменили, имя осталось прежним."""
+        """Пароль точки сменили, имя осталось прежним. Отдаёт имя сети."""
         ssid = self.ap_ssid()
         self.set_ap(ssid, new)
         self.restart()
@@ -327,6 +379,23 @@ class Router:
             yield ssid
         finally:
             self.set_ap(ssid, self._known_password())
+            self.restart()
+
+    @contextmanager
+    def renamed(self, new: str) -> Iterator[str]:
+        """
+        Точку переименовали.
+
+        Для платы это неотличимо от исчезнувшего роутера: сети с прежним именем
+        в эфире больше нет. Пароль остаётся прежним - иначе беды было бы две.
+        """
+        was = self.ap_ssid()
+        self.set_ap(new, self._known_password())
+        self.restart()
+        try:
+            yield new
+        finally:
+            self.set_ap(was, self._known_password())
             self.restart()
 
     # --- снимок и возврат ---
@@ -344,6 +413,7 @@ class Router:
         несравнимо выше одной лишней перезагрузки. Перезагрузка нужна и сама
         по себе: после `ap disable` NAT оживает только ею.
         """
+        self.portmaps_clear()
         if not self._ap_dirty:
             return
 
@@ -352,6 +422,9 @@ class Router:
         if ssid:
             self.set_ap(ssid, self._known_password())
         self.set_ap_channel(_number(state.get('channel', ''), default=0))
+        auth = state.get('security', '').replace('/', '').lower()
+        if auth:
+            self.set_ap_auth(auth)
         self.restart()
         self._ap_dirty = False
 
@@ -363,6 +436,12 @@ class Router:
 
     def close(self) -> None:
         self._c.close()
+
+    def __enter__(self) -> Router:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 def connect(host: str, password: str, ap_password: str = '') -> Router:

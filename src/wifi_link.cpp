@@ -21,6 +21,10 @@ namespace {
 // попытки идут каждые несколько секунд, и без прореживания консоль забьётся
 constexpr uint32_t kReportPeriodMs = 60000;
 
+// Событие разрыва, пришедшее в эти миллисекунды после нашей же команды, -
+// эхо этой команды, а не беда. Своё приходит мгновенно, чужое - через секунды
+constexpr uint32_t kSelfDownMs = 300;
+
 // Перезапуск радио: сколько держать выключенным. Ждём не delay(), а в loop():
 // за 200 мс UART испытуемого на 115200 приносит больше, чем держит буфер
 constexpr uint32_t kRadioOffMs = 200;
@@ -93,6 +97,15 @@ void WifiLink::begin() {
                            << ", MAC " << WiFi.macAddress() << ", own AP " << ap_ssid_);
 }
 
+void WifiLink::note_self_down() {
+    self_down_at_.store(millis());
+    self_down_armed_.store(true);
+}
+
+bool WifiLink::ours_now() const {
+    return self_down_armed_.load() && millis() - self_down_at_.load() < kSelfDownMs;
+}
+
 void WifiLink::subscribe_events() {
 #ifdef ESP32
     WiFi.onEvent([this](arduino_event_id_t event, arduino_event_info_t info) {
@@ -106,7 +119,7 @@ void WifiLink::subscribe_events() {
             break;
         case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
             got_ip_.store(false);
-            if (!take(self_down_)) last_reason_.store(info.wifi_sta_disconnected.reason);
+            if (!ours_now()) last_reason_.store(info.wifi_sta_disconnected.reason);
             down_events_.store(down_events_.load() + 1); // пишет только задача событий
             break;
         default:
@@ -233,7 +246,7 @@ void WifiLink::execute(Action action, uint32_t now) {
     case Action::RestartRadio:
         LOG_INFO("wifi: restarting radio");
         radio_off_ap_ = ap_active(); // погаснет вместе с радио - поднимем заново
-        self_down_.store(true);      // разрыв наш: причиной его не считаем
+        note_self_down();            // разрыв наш: причиной его не считаем
         WiFi.mode(WIFI_OFF);
         radio_off_ = true;
         radio_off_at_ = now;
@@ -254,7 +267,7 @@ void WifiLink::attempt(bool fast) {
 
     // Прошлая попытка могла ещё идти: обрываем её сами. Arduino disconnect()
     // тут не годится - он молча выходит, если связи ещё нет
-    self_down_.store(true);          // разрыв наш: причиной его не считаем
+    note_self_down();                // разрыв наш: причиной его не считаем
 #ifdef ESP32
     esp_wifi_disconnect();
 #else

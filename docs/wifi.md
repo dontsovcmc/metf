@@ -251,10 +251,23 @@ anyway. An unknown code is called `other`, not something confident.
 *And the signal has to be clean for any of this to be true.* Before every
 attempt the firmware tears the link down itself (`esp_wifi_disconnect()`), and
 the core answers that with reason 8, the same code a router uses to say
-goodbye. The first disconnect event after the firmware's own teardown is
-therefore dropped (`self_down_`), and `last_reason` is cleared when the board
-connects and when a new network is set - so `problem` is about the current
-network's current trouble and nothing else.
+goodbye. Such an echo is dropped, but **by time, not by a flag**: when the
+board is already offline our own teardown produces no event at all, and a
+flag armed for "the next event" then eats the real reason of every following
+failure. That is not hypothetical - it is what the stand caught on the first
+run: a board 137 s offline with ten failed attempts reporting `last_reason: 0`.
+An event within 300 ms of our own command is an echo; a genuine failure takes
+seconds. `last_reason` is also cleared when the board connects and when a new
+network is set, so `problem` is about the current network's current trouble
+and nothing else.
+
+*What the classification cannot do:* tell a wrong password from a missing
+network on a weak link. Measured on the stand against a router at -84 dBm: with
+a deliberately wrong password the station gives up before the handshake and the
+core reports 201 `NO_AP_FOUND`, so the page says "Сеть не найдена". The same
+board against the bench router at -71 dBm reports 15 and says "Неверный
+пароль". This is a property of the radio, not of the firmware - and the reason
+the stand tests the typo against the near network.
 
 ## The algorithm
 
@@ -424,24 +437,26 @@ redirect served, and a full change of network through the form, after which the 
 came back to the bench network at the same address with `source: saved`. The
 stand is described in [Utils/hil/README.md](../Utils/hil/README.md).
 
-**The four troubles of a user.** Until now the failure paths were argued from
-the policy's host tests and from a made-up network name; nothing had taken a
-real network away from a running board. Two of them are now measured on the
-bench board (C6), with a second board with ESP-AT firmware reading the setup
-page from inside the board's own access point:
+**The troubles of a user, staged for real.** Until now the failure paths were
+argued from the policy's host tests and from a made-up network name; nothing
+had taken a real network away from a running board. They are now staged on a
+managed WT32-ETH01 (`esp32_nat_router`, console over the wire) and on the bench
+router, with a second board with ESP-AT firmware reading the setup page from
+inside the board's own access point: `pytest Utils/hil --stand -k router`,
+six scenarios, **all green in 10 min 39 s**.
 
 | Staged | What the board did |
 |---|---|
-| the right network, the password mistyped | round of two attempts, then its own access point, ~25 s from the change; `problem: password` from `last_reason` **15** (four-way handshake), the page says «Неверный пароль» |
-| a network that is not on the air | the same ladder; `problem: not_found` from 201, the page says «Сеть не найдена». Restored through the page with `action=forget`, back on the bench network in under a minute |
+| the right network, the password mistyped | round of two attempts, then its own access point ~25 s after the change; `problem: password` from `last_reason` **15** (four-way handshake), the page says «Неверный пароль» |
+| the password changed on the router | the board had been online, so the access point came up after the promised two minutes, not at once; the page named the password, the "phone" typed the new one into the form, and the board was back on that network within a minute |
+| the network renamed | the old name gone means `problem: not_found` (201); the **new name appeared in the page's list of networks** - found by the board's own scan - and setting it from the page brought the board back |
+| the router switched off, then on | own access point after two minutes; when the router returned the board rejoined **by itself**, with nothing touched - the once-a-minute probe doing its job |
+| the router rebooted | survived it silently: back on the same network, access point never raised |
+| the router moved to another channel | found the network on the new channel and stayed reachable there |
 
-The three that need a network under someone's control - the router switched
-off and back on, rebooted, moved to another channel - are written as
-`Utils/hil/test_router.py` against a managed WT32-ETH01 (`esp32_nat_router`,
-console over the wire) and **have not been run yet**: the console password is
-not in `stand.ini` on this machine. They are the reason the file exists; until
-they run, those three rows of the promise rest on the host tests of the policy
-alone.
+The three of those that end with the board back on the network are the ones
+that matter most: they are the promise that a bench which lost its router does
+not need a human at all, and they had never been shown before.
 
 **The bench link is weak, and it shows.** RSSI on the bench sits at -71 to -80
 dBm, and at that level `test/board` fails intermittently - about one test in
@@ -488,10 +503,12 @@ Listed so that an audit argues with a decision rather than discovering a hole.
    compiled and shares the code with the C6, but every measurement here is from
    the C6.
 6. **The channel-follow and radio-restart paths are untested on hardware.**
-   Both are reached only by scenarios that need a second access point on a
-   chosen channel (`follow_channel()`) or a radio that stops answering
-   (`RestartRadio`). The policy side of the restart is covered by a host test;
-   the radio side is not.
+   The station side of a channel move is now covered - the stand walks the
+   router to another channel and the board follows (`Utils/hil/test_router.py`)
+   - but `follow_channel()`, which moves the board's *own* access point after
+   the radio, needs the board to be serving a phone while its router moves, and
+   `RestartRadio` needs a radio that stops answering. The policy side of the
+   restart is covered by a host test; the radio side is not.
 7. **The board's own access point is not hidden from the neighbours while it
    probes.** It stays on the air between probes, so anyone in range sees a
    `METF-XXXX` network even in the seconds when the board is off talking to the

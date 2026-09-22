@@ -11,7 +11,7 @@
 вместе с выстраданными мелочами ниже; прошивка AT и её установка описаны там же,
 в 02_nodemcu-at.md. Здесь он живёт своей жизнью: без loguru, со сканом эфира.
 
-Три правила, без которых ничего не работает; каждое проверено на живой паре.
+Четыре правила, без которых ничего не работает; каждое проверено на живой паре.
 
 1. Запрос обязан уйти сразу после CONNECT. ESPAsyncWebServer ставит клиенту
    `setRxTimeout(3)` (WebServer.cpp:44) и рвёт соединение, если за три секунды не
@@ -25,6 +25,10 @@
 
 3. Полученные данные читаются по длине, а не по строкам: `+CIPRECVDATA:<n>,`
    и дальше ровно n сырых байт, среди которых бывают и `\r\n`, и `OK`.
+
+4. Переподключением распоряжаемся мы (`AT+CWAUTOCONN=0`, `AT+CWRECONNCFG=0,0`).
+   С заводской настройкой плата вечно ищет пропавшую точку, и в это время не
+   входит ни в какую другую - отвечает «точка не найдена».
 
 Признак конца ответа - его собственная длина, а не `CLOSED`: ждать закрытия
 дороже, уведомление приходит с задержкой, и на нём один запрос обходился в
@@ -85,6 +89,7 @@ class AtBoard:
         self.ser = serial.Serial(port, baud, timeout=0.1)
         self.buf = b''
         self._passive = False
+        self._manual = False
         self._mac = ''
         time.sleep(0.3)
         self.ser.reset_input_buffer()
@@ -159,6 +164,23 @@ class AtBoard:
         self.ser.write(line.encode() + b'\r\n')
         return self._until(markers, timeout).decode('utf-8', 'replace')
 
+    def _ensure_manual(self) -> None:
+        """
+        Отобрать у прошивки переподключение.
+
+        `AT+CWAUTOCONN` по умолчанию включён, и плата, потерявшая точку,
+        вечно ищет её сама. Пока она этим занята (`+CWSTATE:3`), вход в любую
+        сеть отвечает `+CWJAP:3` - «точка не найдена», хотя точка в эфире есть
+        и другие платы на ней сидят. На стенде это выглядело как отказ роутера
+        и стоило целого прогона.
+        """
+        if self._manual:
+            return
+        with contextlib.suppress(AtError):
+            self.cmd('AT+CWAUTOCONN=0')
+            self.cmd('AT+CWRECONNCFG=0,0')
+        self._manual = True
+
     def _ensure_passive(self) -> None:
         """
         Включить пассивный приём, если он ещё не включён.
@@ -194,15 +216,30 @@ class AtBoard:
             time.sleep(0.5)
         return False
 
-    def join(self, ssid: str, password: str = '', timeout: float = 30.0) -> str:
-        """Присоединиться к сети и вернуть свой адрес. Открытая сеть - пустой пароль."""
+    def join(self, ssid: str, password: str = '', timeout: float = 30.0,
+             tries: int = 2) -> str:
+        """
+        Присоединиться к сети и вернуть свой адрес. Открытая сеть - пустой пароль.
+
+        Сначала отбираем у прошивки автоподключение и выходим из прежней сети:
+        плата, которую оставили в исчезнувшей точке, ищет её сама, и вход в
+        любую другую сеть в это время отвечает `+CWJAP:3` - «точка не найдена».
+        Вторая попытка - на случай, если первая пришлась на такой момент.
+        """
         self.cmd('AT+CWMODE=1')
-        answer = self.cmd(f'AT+CWJAP="{ssid}","{password}"', timeout=timeout)
-        if 'OK' not in answer:
-            raise AtError(f'не удалось подключиться к {ssid}: {answer}')
-        self._passive = False
-        self._ensure_passive()
-        return self.ip()
+        self._ensure_manual()
+        last = ''
+        for attempt in range(tries):
+            with contextlib.suppress(AtError):
+                self.cmd('AT+CWQAP', timeout=5)
+            last = self.cmd(f'AT+CWJAP="{ssid}","{password}"', timeout=timeout)
+            if 'OK' in last:
+                self._passive = False
+                self._ensure_passive()
+                return self.ip()
+            if attempt + 1 < tries:
+                time.sleep(2.0)
+        raise AtError(f'не удалось подключиться к {ssid}: {last}')
 
     def leave(self) -> None:
         """
