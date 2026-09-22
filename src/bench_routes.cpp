@@ -289,6 +289,10 @@ void BenchRoutes::on_i2c(AsyncWebServerRequest *request) {
         const auto response_len = static_cast<uint8_t>(form(request, PARAM_RESPONSE).toInt());
         const auto address = static_cast<uint8_t>(form(request, PARAM_ADDRESS).toInt());
         String hexstring = form(request, PARAM_HEXSTRING);
+        if (hexstring.isEmpty()) { // массив нулевой длины - неопределённое поведение
+            send_400(request, Error::IncorrectValue, PARAM_HEXSTRING);
+            return;
+        }
 
         uint8_t arr[hexstring.length()]; // NOLINT: VLA, как было; длина ограничена запросом
         const size_t len = hexText2AsciiArray(hexstring, arr, hexstring.length());

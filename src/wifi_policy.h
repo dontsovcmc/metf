@@ -50,6 +50,7 @@ public:
         uint32_t probe_period_ms = 60000;    // проба при поднятой AP
         uint32_t portal_idle_ms = 600000;    // клиент AP без запросов перестаёт мешать
         uint32_t ap_stop_grace_ms = 60000;   // AP живёт после успеха, пока клиент на ней
+        uint32_t ap_manual_ms = 600000;      // точка, поднятая по просьбе, ждёт человека
         uint32_t ap_retry_ms = 10000;        // повтор StartAp, если точка не поднялась
         uint8_t forget_fast_after = 2;       // неудачных быстрых подряд до забывания пары
         uint8_t radio_restart_every = 4;     // каждый N-й неудачный раунд подряд
@@ -91,7 +92,8 @@ public:
 private:
     Action start_attempt(uint32_t now, const Facts &f, bool allow_fast);
     Action on_attempt_timeout(uint32_t now, const Facts &f);
-    Action enter_ap(uint32_t now);
+    Action enter_ap(uint32_t now, bool manual);
+    bool keep_manual_ap(uint32_t now, const Facts &f) const;
     bool portal_busy(uint32_t now, const Facts &f) const;
     static bool elapsed(uint32_t now, uint32_t since, uint32_t period) {
         return static_cast<uint32_t>(now - since) >= period;
@@ -118,6 +120,7 @@ private:
     uint32_t wait_ms_ = 0;
     uint32_t online_since_ = 0;
     uint32_t ap_requested_at_ = 0;
+    bool ap_manual_ = false; // точку просили кнопкой или по HTTP, а не политика
 
     uint8_t prev_clients_ = 0;
     uint32_t busy_mark_ = 0;       // последний признак жизни клиента AP

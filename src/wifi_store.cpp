@@ -107,7 +107,13 @@ bool WifiStore::write_all() {
     bool ok = true;
     if (creds_.from_nvs) {
         ok &= p.putString(kKeySsid, creds_.ssid) == strlen(creds_.ssid);
-        ok &= p.putString(kKeyPass, creds_.pass) == strlen(creds_.pass);
+        // putString возвращает 0 и при успехе с пустой строкой, и при отказе:
+        // у открытой сети отказ записи иначе выглядел бы как успех
+        if (creds_.pass[0] != '\0') {
+            ok &= p.putString(kKeyPass, creds_.pass) == strlen(creds_.pass);
+        } else if (p.isKey(kKeyPass)) {
+            ok &= p.remove(kKeyPass);
+        }
     } else {
         // isKey() - чтобы ядро не печатало ошибку стирания несуществующего
         if (p.isKey(kKeySsid)) p.remove(kKeySsid);

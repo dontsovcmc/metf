@@ -333,8 +333,9 @@ bool WifiLink::ap_active() const { return (WiFi.getMode() & WIFI_AP) != 0; }
 
 void WifiLink::follow_channel(uint32_t now) {
 #ifdef ESP32
-    // Во время попытки радио прыгает по каналам - это не повод двигать точку
-    if (!ap_active() || policy_.attempting()) {
+    // Во время попытки и скана радио прыгает по каналам - это не повод
+    // двигать точку
+    if (!ap_active() || policy_.attempting() || scan_running_.load()) {
         channel_mismatch_ = false;
         return;
     }
@@ -345,8 +346,11 @@ void WifiLink::follow_channel(uint32_t now) {
         channel_mismatch_ = false;
         return;
     }
-    if (!channel_mismatch_) {
+    // Отсчёт - для одного и того же чужого канала: иначе «три секунды
+    // несовпадения» набираются из разных каналов, по которым идёт скан
+    if (!channel_mismatch_ || radio != channel_mismatch_at_) {
         channel_mismatch_ = true;
+        channel_mismatch_at_ = radio;
         channel_mismatch_since_ = now;
         return;
     }
@@ -370,8 +374,11 @@ void WifiLink::on_connected() {
 
     WifiStore::Fast f;
     f.channel = static_cast<uint8_t>(WiFi.channel());
-    memcpy(f.bssid, WiFi.BSSID(), sizeof(f.bssid));
-    if (f.valid() && !(f == store_.fast())) {
+    // BSSID() отдаёт NULL, если станция успела отвалиться между проверкой
+    // связи и этим вызовом: esp_wifi_sta_get_ap_info вернёт NOT_CONNECT
+    const uint8_t *bssid = WiFi.BSSID();
+    if (bssid != nullptr) memcpy(f.bssid, bssid, sizeof(f.bssid));
+    if (bssid != nullptr && f.valid() && !(f == store_.fast())) {
         bool ok = false;
         {
             const Guard g(mtx_);

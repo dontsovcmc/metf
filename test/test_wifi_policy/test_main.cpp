@@ -309,6 +309,85 @@ void test_millis_wrap_during_outage() {
     TEST_ASSERT_UINT32_WITHIN(10000, lost + 125000, ap[0]);
 }
 
+// --- найденное ревью: точка по просьбе гасла на следующем же шаге
+
+void test_requested_ap_stays_up_while_online() {
+    bring_online();
+    policy.request_ap();
+    clock_.run_for(policy, radio, 300000); // пять минут никто не подключился
+    TEST_ASSERT_EQUAL(1, radio.times_of(Action::StartAp).size());
+    TEST_ASSERT_EQUAL(0, radio.times_of(Action::StopAp).size());
+    TEST_ASSERT_TRUE(radio.ap_up);
+}
+
+void test_requested_ap_stays_up_while_a_client_is_on_it() {
+    bring_online();
+    policy.request_ap();
+    clock_.run_for(policy, radio, 60000);
+    radio.ap_clients = 1;
+    clock_.run_for(policy, radio, 900000); // дольше ap_manual_ms
+    TEST_ASSERT_TRUE(radio.ap_up);
+}
+
+void test_requested_ap_goes_down_when_nobody_came() {
+    bring_online();
+    policy.request_ap();
+    clock_.run_for(policy, radio, 601000); // ap_manual_ms без единого клиента
+    TEST_ASSERT_EQUAL(1, radio.times_of(Action::StopAp).size());
+    TEST_ASSERT_FALSE(radio.ap_up);
+}
+
+// --- найденное ревью: отложенный приказ забыть пару переживал успех
+
+void test_successful_connect_cancels_pending_forget() {
+    WifiPolicy::Config cfg;
+    cfg.lost_ap_after_ms = 1000000; // держим плату в Lost, без точки
+    policy = WifiPolicy(cfg);
+    bring_online();
+
+    // Роутер уходит, две быстрые попытки подряд промахиваются - политика
+    // решает забыть пару, но следующий скан успевает подключиться
+    radio.router_up = false;
+    clock_.run_for(policy, radio, 25000);  // раунд 1: быстрая и скан мимо
+    clock_.run_for(policy, radio, 15100);  // раунд 2: быстрая мимо
+    radio.router_up = true;                // роутер вернулся к скану раунда 2
+    clock_.run_for(policy, radio, 15000);
+    TEST_ASSERT_TRUE(policy.state() == State::Online);
+    TEST_ASSERT_TRUE(radio.has_fast);
+
+    // Пара проверена подключением. Забыть её можно только заново, после
+    // двух новых промахов быстрой попытки, - то есть не раньше второго
+    // раунда следующего разрыва, а не в первую же паузу.
+    radio.log.clear();
+    radio.router_up = false;
+    const uint32_t lost = clock_.now;
+    clock_.run_for(policy, radio, 60000);
+    const auto forgets = radio.times_of(Action::ForgetFast);
+    TEST_ASSERT_EQUAL(1, forgets.size());
+    TEST_ASSERT_TRUE_MESSAGE(forgets[0] - lost >= 30000,
+                             "пара забыта раньше двух новых промахов");
+}
+
+// --- найденное ревью: перезапуск радио гасил поднятую точку
+
+void test_no_radio_restart_while_ap_is_up() {
+    // Точку подняли по просьбе, и тут пропала сеть: раунды идут, а точка
+    // в эфире. Перезапуск радио погасил бы её, и поднять её обратно некому -
+    // человек за эти секунды потерял бы страницу настройки.
+    WifiPolicy::Config cfg;
+    cfg.lost_ap_after_ms = 1000000;
+    policy = WifiPolicy(cfg);
+    bring_online();
+    policy.request_ap();
+    clock_.run_for(policy, radio, 1000);
+    TEST_ASSERT_TRUE(radio.ap_up);
+
+    radio.router_up = false;
+    clock_.run_for(policy, radio, 5 * 25000);
+    TEST_ASSERT_EQUAL(0, radio.times_of(Action::RestartRadio).size());
+    TEST_ASSERT_TRUE(radio.ap_up);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_first_attempt_waits_five_seconds);
@@ -334,5 +413,10 @@ int main() {
     RUN_TEST(test_stale_pair_forgotten_after_two_failed_fast_attempts);
     RUN_TEST(test_radio_restart_every_fourth_failed_round);
     RUN_TEST(test_millis_wrap_during_outage);
+    RUN_TEST(test_requested_ap_stays_up_while_online);
+    RUN_TEST(test_requested_ap_stays_up_while_a_client_is_on_it);
+    RUN_TEST(test_requested_ap_goes_down_when_nobody_came);
+    RUN_TEST(test_successful_connect_cancels_pending_forget);
+    RUN_TEST(test_no_radio_restart_while_ap_is_up);
     return UNITY_END();
 }

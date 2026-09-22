@@ -12,7 +12,7 @@ Action WifiPolicy::tick(uint32_t now, const Facts &f) {
     if (pending_ap_) {
         pending_ap_ = false;
         started_ = true;
-        return enter_ap(now);
+        return enter_ap(now, true);
     }
 
     if (pending_connect_) {
@@ -25,7 +25,7 @@ Action WifiPolicy::tick(uint32_t now, const Facts &f) {
         fast_fails_ = 0;
         failed_rounds_ = 0;
         attempt_in_round_ = 0;
-        if (!f.has_creds) return enter_ap(now);
+        if (!f.has_creds) return enter_ap(now, false);
         state_ = State::Connecting;
         return start_attempt(now, f, true);
     }
@@ -33,7 +33,7 @@ Action WifiPolicy::tick(uint32_t now, const Facts &f) {
     if (!started_) {
         started_ = !f.has_creds || now >= cfg_.start_delay_ms;
         if (!started_) return Action::None;
-        if (!f.has_creds) return enter_ap(now);
+        if (!f.has_creds) return enter_ap(now, false);
         return start_attempt(now, f, true);
     }
 
@@ -48,10 +48,17 @@ Action WifiPolicy::tick(uint32_t now, const Facts &f) {
             fast_fails_ = 0;
             failed_rounds_ = 0;
             failed_attempts_ = 0;
+            // Пара, которой только что подключились, рабочая: снимаем и
+            // отложенный приказ её забыть, иначе он сработает в следующий
+            // разрыв и сотрёт проверенный канал
+            forget_pending_ = false;
         }
         // Точку гасим, как только она никому не нужна. Клиенту даём минуту:
-        // он настраивал сеть и должен успеть увидеть новый адрес платы
-        if (f.ap_up && (f.ap_clients == 0 || elapsed(now, online_since_, cfg_.ap_stop_grace_ms)))
+        // он настраивал сеть и должен успеть увидеть новый адрес платы.
+        // Точку, поднятую по просьбе, не гасим: её поднимали, чтобы к ней
+        // подключились, а на это нужно время.
+        if (f.ap_up && !keep_manual_ap(now, f) &&
+            (f.ap_clients == 0 || elapsed(now, online_since_, cfg_.ap_stop_grace_ms)))
             return Action::StopAp;
         return Action::None;
     }
@@ -73,7 +80,7 @@ Action WifiPolicy::tick(uint32_t now, const Facts &f) {
         return Action::ForgetFast;
     }
 
-    if (!f.has_creds && state_ != State::Ap) return enter_ap(now);
+    if (!f.has_creds && state_ != State::Ap) return enter_ap(now, false);
 
     if (state_ == State::Ap) {
         if (!f.ap_up && elapsed(now, ap_requested_at_, cfg_.ap_retry_ms)) {
@@ -88,7 +95,7 @@ Action WifiPolicy::tick(uint32_t now, const Facts &f) {
     }
 
     if (state_ == State::Lost && elapsed(now, lost_since_, cfg_.lost_ap_after_ms))
-        return enter_ap(now);
+        return enter_ap(now, false);
 
     if (!elapsed(now, wait_since_, wait_ms_)) return Action::None;
     return start_attempt(now, f, true);
@@ -128,23 +135,39 @@ Action WifiPolicy::on_attempt_timeout(uint32_t now, const Facts &f) {
     wait_ms_ = 0;
     failed_rounds_++;
 
-    if (!ever_online_) return enter_ap(now);
+    if (!ever_online_) return enter_ap(now, false);
     if (state_ == State::Lost && elapsed(now, lost_since_, cfg_.lost_ap_after_ms))
-        return enter_ap(now);
+        return enter_ap(now, false);
 
     wait_ms_ = cfg_.lost_pause_ms;
-    if (cfg_.radio_restart_every != 0 && failed_rounds_ % cfg_.radio_restart_every == 0)
+    // Перезапуск радио гасит и точку доступа, а поднять её обратно некому:
+    // пока она в эфире, лечим радио только попытками
+    if (!f.ap_up && cfg_.radio_restart_every != 0 &&
+        failed_rounds_ % cfg_.radio_restart_every == 0)
         return Action::RestartRadio;
     return Action::None;
 }
 
-Action WifiPolicy::enter_ap(uint32_t now) {
+Action WifiPolicy::enter_ap(uint32_t now, bool manual) {
     state_ = State::Ap;
     attempting_ = false;
     attempt_in_round_ = 0;
     ap_requested_at_ = now;
     wait_since_ = now;
+    ap_manual_ = manual;
+    if (manual) portal_activity(now); // человек идёт к точке, дадим ему время
     return Action::StartAp;
+}
+
+/*
+Точку, поднятую кнопкой или командой, держим, пока к ней кто-то подключён и
+ещё ap_manual_ms после последнего признака жизни. Иначе она гаснет через
+доли секунды: плата в сети, клиентов нет - и общее правило её тушит.
+*/
+bool WifiPolicy::keep_manual_ap(uint32_t now, const Facts &f) const {
+    if (!ap_manual_) return false;
+    if (f.ap_clients > 0) return true;
+    return !elapsed(now, busy_mark_, cfg_.ap_manual_ms);
 }
 
 bool WifiPolicy::portal_busy(uint32_t now, const Facts &f) const {

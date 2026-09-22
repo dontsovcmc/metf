@@ -190,6 +190,7 @@ private:
     bool radio_off_ = false;         // идёт перезапуск радио
     uint32_t radio_off_at_ = 0;
     uint32_t channel_mismatch_since_ = 0;
+    uint8_t channel_mismatch_at_ = 0;
     bool channel_mismatch_ = false;
     uint32_t channel_moved_at_ = 0;
 

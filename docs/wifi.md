@@ -232,6 +232,7 @@ Timings, all in [`WifiPolicy::Config`](../src/wifi_policy.h):
 | `probe_period_ms` | 60 s | between probes while the access point is up |
 | `portal_idle_ms` | 10 min | a silent client stops blocking the probes |
 | `ap_stop_grace_ms` | 60 s | the access point stays this long after success if a client is on it |
+| `ap_manual_ms` | 10 min | an access point raised by the button or by `action=ap` waits this long for somebody to arrive |
 | `ap_retry_ms` | 10 s | `softAP()` failed - try again |
 | `forget_fast_after` | 2 | failed fast attempts before the saved channel is erased |
 | `radio_restart_every` | 4 | failed rounds before `WIFI_OFF` and back |
@@ -263,6 +264,9 @@ the policy, in words
                      is using the setup page
   connected again -> the access point goes down (at once if nobody is on it,
                      a minute later if somebody is - they need to read the IP)
+  the button or action=ap -> the access point goes up even on a board that is
+                     on the network, and stays up while somebody is on it and
+                     for ten minutes after the last sign of life
   new network from the portal -> saved, and a round starts immediately
 ```
 
@@ -394,7 +398,10 @@ Listed so that an audit argues with a decision rather than discovering a hole.
    chosen channel (`follow_channel()`) or a radio that stops answering
    (`RestartRadio`). The policy side of the restart is covered by a host test;
    the radio side is not.
-7. **`forget` is reachable from the setup page without a confirmation.** One tap
+7. **An access point raised on request cannot be lowered on request.** It goes
+   down by itself once nobody has been on it for ten minutes. There is no
+   `action=ap&value=0`, because nothing needed one yet.
+8. **`forget` is reachable from the setup page without a confirmation.** One tap
    on "Сеть из прошивки" drops a saved network. The page is only reachable by
    somebody with physical proximity to the bench, and the network can be set
    again on the same page.
