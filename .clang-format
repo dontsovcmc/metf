@@ -1,0 +1,8 @@
+# Для новых и перенесённых файлов; старые целиком не переформатируем.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+BreakBeforeBraces: Attach
+PointerAlignment: Right

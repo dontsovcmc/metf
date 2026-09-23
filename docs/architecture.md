@@ -2,7 +2,27 @@
 
 METF is an HTTP-controlled test bench: the ESP board is wired to a device under test (DUT) and exposes GPIO, I2C, the DUT's serial log and an NTP server over HTTP. The main DUT is the Waterius device: several behaviours (NTP request/reply format, log buffer size) are sized and checked against its firmware.
 
-Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP and RGB are ESP32-only.
+Platform code is split with `#ifdef ESP32` / `#ifdef ESP8266`. NTP is ESP32-only.
+
+## The classes and what each one is allowed to know
+
+`main.cpp` only wires things together: it creates the server, the network and the bench routes, and calls `begin()` and `loop()` on them. Everything else lives in a class that knows as little as it can get away with.
+
+| Class | File | Knows about | Deliberately does not know about |
+|---|---|---|---|
+| `WifiPolicy` | `src/wifi_policy.*` | time and facts; no Arduino at all | the radio, flash, HTTP |
+| `WifiStore` | `src/wifi_store.*` | `Preferences` (ESP32) or `EEPROM` (ESP8266) | the radio, HTTP |
+| `WifiLink` | `src/wifi_link.*` | `WiFi`, the policy, the store, the button | HTTP, the LED |
+| `wifi_reason` | `src/wifi_reason.*` | the numbering of disconnect codes; no Arduino | everything else: it is a function, not an object |
+| `WifiPortal` | `src/wifi_portal.*` | `WifiLink`, `AsyncWebServer`, `DNSServer` | the LED, and the radio: it has no `WiFi.h` and no `#ifdef` for a platform |
+| `Blinker` | `src/blinker.*` | a `LedDriver`; no Arduino | the network, the server |
+| `RgbLedDriver`, `GpioLedDriver` | `src/rgb_led_driver.h`, `src/gpio_led_driver.h` | the core's RMT / `digitalWrite` | rhythms |
+| `Connectivity` | `src/connectivity.*` | all of the above; the facade | the bench routes |
+| `BenchRoutes` | `src/bench_routes.*` | GPIO, I2C, the DUT's UART, `NtpServer` | the network |
+
+Three of them - `WifiPolicy`, `Blinker` and `wifi_reason` - are pure C++ and are therefore tested on a PC (`test/test_wifi_policy`, `test/test_blinker`, `test/test_wifi_reason`), with a simulated radio and a fake LED that live in `test/`. `wifi_reason` turns a disconnect code into the cause a human reads; `WifiPortal` puts the phrase on the page and the key in `GET /wifi`, and `WifiLink` puts the same word in the console.
+
+The facade is called `Connectivity` and not `Network` because the ESP32 core has its own `Network.h` and a global object named `Network`; on a case-insensitive file system a `network.h` of ours would be included in its place, and the build fails in the middle of the library.
 
 ## WiFi: modem sleep is off
 
@@ -24,26 +44,23 @@ compatibility, so one call covers both platforms.
 
 ## The server starts even when WiFi does not
 
-A failed `WiFi.waitForConnectResult()` is logged and nothing more: `setup()` runs
-to the end and `server.begin()` is always reached. Giving up there instead - the
-early `return` this firmware used to have - leaves the board in the worst state
-it can be in. The core keeps reconnecting on its own (`STAClass::_autoReconnect` is true by
-default - `STA.cpp:231` of Arduino core 3.2.0 - and `NO_AP_FOUND` and
-`BEACON_TIMEOUT` are both on its list of reasons worth retrying, `STA.cpp:58`), so the board joins the network a minute later and
-answers pings - while the HTTP server, never started, is gone until someone
-presses reset. One power cut that brings up the board before the access point is
-enough to produce it, and nothing about the board looks broken afterwards.
+`setup()` never waits for the network: it starts the radio, registers the routes
+and calls `server.begin()`, and the first connect attempt happens five seconds
+later, from `loop()`. Giving up in `setup()` instead - the early `return` this
+firmware used to have - leaves the board in the worst state it can be in: the
+board joins the network a minute later and answers pings, while the HTTP server,
+never started, is gone until someone presses reset. One power cut that brings up
+the board before the access point is enough to produce it, and nothing about the
+board looks broken afterwards.
 
-The wait itself is `WIFI_CONNECT_WAIT_MS` (15 s), not the 60 s default, and it
-buys only the address line in the console. The default costs a full minute of no
-HTTP at all on a board flashed with a wrong password: measured on an ESP32-C6,
-`waitForConnectResult()` returns in 2.9 s when the network is simply not there
-(`NO_AP_FOUND`) and sits out all 60 s when the password is wrong - the core
-reports `4WAY_HANDSHAKE_TIMEOUT` and keeps retrying without ever concluding.
+The earlier firmware also blocked for up to 15 seconds in
+`WiFi.waitForConnectResult()` just to print the address at boot. It does not any
+more: the address is printed when the board actually joins, and the console says
+so again after every outage.
 
 ## What the board says about the network
 
-`wifi_watch()` subscribes to the station events before the first `WiFi.begin()`,
+`WifiLink::subscribe_events()` subscribes to the station events before the first `WiFi.begin()`,
 so every loss of the network reaches the console: `wifi: disconnected, reason
 201 NO_AP_FOUND` at the moment it happens, then one line a minute
 (`WIFI_REPORT_PERIOD_MS`) with how long it has been offline and how many attempts
@@ -51,17 +68,16 @@ that took, and `wifi: back after N s and M attempts, ip ...` when it returns.
 
 Without it the board is mute, and a METF that has lost the network looks exactly
 like a METF that has hung: no answer on HTTP, nothing in the console. The
-throttling is not cosmetic - the core retries every 2.4 s while the access point
-is missing and every 3.1 s while the password is wrong (both measured over
-2.5 minutes), so one line per event would bury the console in a night.
+throttling is not cosmetic - attempts go every few seconds, so one line per event
+would bury the console in a night.
 
-Forever is the right answer here, unlike on the harness's own AT board: METF must
-rejoin the router that will come back, while that board was hunting an access
-point the harness had switched off on purpose.
+Retrying does not stop, but its shape changes: after a couple of minutes without
+the network the board also raises its own access point and then probes the router
+once a minute. The full algorithm and its timings are in [wifi.md](wifi.md).
 
 ESP32 has `WiFi.onEvent`; ESP8266 has `onStationModeDisconnected` /
 `onStationModeGotIP`, whose subscriptions live only as long as the returned
-`WiFiEventHandler`, hence the globals. The reason name (`NO_AP_FOUND`) comes from
+`WiFiEventHandler`, hence the two handler members of `WifiLink`. The reason name (`NO_AP_FOUND`) comes from
 `WiFi.disconnectReasonName()` and exists on ESP32 only; the number is printed on
 both.
 
@@ -74,30 +90,33 @@ both.
 
 On the C6, `setup()` waits 2 s before printing because the USB CDC comes up after the firmware starts and anything printed earlier is lost.
 
-## Web server (`src/main.cpp`)
+## Web server (`src/main.cpp`, `src/bench_routes.*`, `src/wifi_portal.*`)
 
-`AsyncWebServer` on port 80; all routes are registered in `setup()`, and `loop()` only pumps `METF_SERIAL` into the serial buffer.
+`AsyncWebServer` on port 80, created in `main.cpp` and handed to whoever registers routes on it: `Connectivity` (the setup page, `/wifi`, `/rgb`, the captive-portal probes and `onNotFound`) and `BenchRoutes` (everything that drives the device under test). `loop()` calls `Connectivity::loop()` and `BenchRoutes::loop()`, and nothing else.
 
 | Route | Notes |
 |---|---|
 | `GET /ping`, `GET /version` | connectivity; protocol version |
 | `POST /pinMode`, `GET /digitalRead`, `POST /digitalWrite` | GPIO |
-| `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timed by the ESP on a `Ticker`, `409` while one is running |
+| `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timed by the ESP on a `Ticker`, answered at once with `202`; 8 pins can pulse at once, `409` for a pin already pulsing |
 | `POST /i2c` | `action=begin/setClock/setClockStretchLimit/ask/flush`; `ask` takes `address`, `hexstring`, `response` (bytes to read) and returns hex |
 | `POST /serial` | `baudrate` (allow-listed in `kAllowedBauds`) and `flush=1`. A missing `baudrate` means 115200, so a flush-only call resets the speed |
 | `GET /read`, `GET /read/stat` | drain the serial log; ring state as JSON (`lines`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`) |
 | `POST /ntp`, `GET /ntp/stat` | ESP32 only, see below |
-| `POST /rgb` | ESP32 only, compiled only when `RGB_DEFAULT_PIN` is defined |
+| `POST /rgb` | the status LED, taken over by the bench; needs `RGB_DEFAULT_PIN` or `STATUS_LED_PIN` |
+| `GET /`, `GET /wifi`, `POST /wifi` | the setup page and the network API; plus the captive-portal probes, which redirect a client of the board's own access point to `/` |
 
 Parameters, responses and errors of every route: [api.md](api.md).
 
 Conventions and traps:
 
 - **Never block in a handler.** The handlers do not run on the loop thread - they run in the task that serves every connection of the board, and the library states it outright: *"You can not use yield or delay or any function that uses them inside the callbacks"*. The cost is not theoretical. A handler asleep for 4 seconds starves every other connection: AsyncTCP drops poll events once its queue passes three quarters (`CONFIG_ASYNC_TCP_QUEUE_SIZE`, 64), a client has 3 seconds to send its request (`setRxTimeout(3)` on accept) and unacknowledged data times out after 5 (`CONFIG_ASYNC_TCP_MAX_ACK_TIME`). That is how `/pulse` used to be written, and a bench that polls `/read` ten times a second saw read timeouts during every 4-second button press, then a board that stopped answering altogether by the end of an hour-long run.
-- **Wait by arming a timer, answer with `RESPONSE_TRY_AGAIN`.** `/pulse` is the worked example: it arms a `Ticker` (in the core of both platforms - no extra library), returns, and answers from a chunked response whose filler says `RESPONSE_TRY_AGAIN` until the timer has fired. The client still gets its answer only when the line is released, and the board stays responsive throughout. On ESP8266 the timer uses `once_ms_scheduled()`, which runs the callback from `loop()` instead of SYS context; ESP32 has no such variant and its `Ticker` already dispatches from the `esp_timer` task.
+- **Wait by arming a timer, and answer at once.** `/pulse` is the worked example: it arms a `Ticker` (in the core of both platforms - no extra library), answers `202` with the duration, and returns. On ESP8266 the timer uses `once_ms_scheduled()`, which runs the callback from `loop()` instead of SYS context; ESP32 has no such variant and its `Ticker` already dispatches from the `esp_timer` task.
+- **Do not defer an answer to mark a moment in time.** Protocol 7 held the `/pulse` answer back with a chunked response whose filler returned `RESPONSE_TRY_AGAIN` until the timer fired, so that the answer would mean "line released". A deferred answer does not leave when it is ready: the filler is called again on the connection's next poll, roughly twice a second (`CONFIG_ASYNC_TCP_POLL_TIMER`). Measured: 240-336 ms late on a 20 ms pulse. `RESPONSE_TRY_AGAIN` is right for data that is not ready yet; it is wrong as a stopwatch.
 - **Register `/x/sub` before `/x`.** `AsyncCallbackWebHandler::canHandle` also matches by prefix (`url.startsWith(_uri + "/")`), so `/read` or `/ntp` declared first would swallow `/read/stat` / `/ntp/stat`.
 - POST parameters are form-encoded in the body: use `hasParam(name, true)` / `getParam(name, true)`. Without the second argument only the query string is searched - that silently broke `/serial` once; it now uses `param_any()` (body, then query).
-- Errors: 400 via `response_400()` for missing/incorrect parameters, 500 for hardware failures (I2C errors, UDP bind failure), 404 for unknown routes.
+- Errors: 400 via `http::send_400()` for missing/incorrect parameters, 500 for hardware failures (I2C errors, UDP bind failure), 404 for unknown routes. The helpers live in `src/http_util.*`.
+- **Handlers do not touch the radio or the flash.** `POST /wifi` and `POST /rgb` validate, set an atomic flag and answer; `loop()` does the work. Writing NVS or calling `WiFi.begin()` from the server's task would block every other connection for as long as it takes, which is the same failure as a blocking `/pulse`.
 - ESP8266 I2C stretch limit is `Wire.setClockStretchLimit(us)`; on ESP32 the same action maps to `Wire.setTimeOut(ms)` (µs / 1000, minimum 1000 ms).
 
 ## AsyncSerialBuffer (`src/AsyncSerialBuffer.*`)
@@ -108,7 +127,7 @@ Ring of fixed-size lines filled from `loop()` and drained by `/read`.
 - Defaults (6000 / 60) suit the ESP8266. `esp32-c6-super-mini` uses 65536 / 128 → 511 usable lines, so a full Waterius session fits without eviction.
 - Longer lines are split into several buffer lines; the reader has to glue them back.
 - When full, the oldest line is evicted and counted in `dropped()` (reset by `flush()`, exposed by `/read/stat`). Eviction is otherwise silent, and a silently shortened log makes tests green for the wrong reason - `dropped > 0` means the log has a hole.
-- `LOCK()` / `UNLOCK()` defined here are the project's critical section: a FreeRTOS spinlock (`portENTER_CRITICAL(&mux)`) on ESP32, `noInterrupts()` on ESP8266. `main.cpp` reuses them for baud switching and `FastLED.show()`. On ESP32 they disable interrupts, so keep them short and don't take them for a single aligned word (see `dropped()`).
+- `LOCK()` / `UNLOCK()` defined here are the project's critical section: a FreeRTOS spinlock (`portENTER_CRITICAL(&mux)`) on ESP32, `noInterrupts()` on ESP8266. `BenchRoutes` reuses them for baud switching. On ESP32 they disable interrupts, so keep them short and don't take them for a single aligned word (see `dropped()`).
 
 ## NTP server (`src/NtpServer.*`, `src/ntp_packet.h`) - ESP32 only
 
@@ -124,9 +143,27 @@ UDP server on port 123 that answers the DUT with whatever time the test assigned
 
 ESP8266 has no AsyncUDP in its core, hence the `#ifdef ESP32`.
 
-## RGB LED (ESP32 only, optional)
+## Status LED (`src/blinker.*`, `src/*_led_driver.h`)
 
-WS2812B via FastLED, compiled only with `-DRGB_DEFAULT_PIN=<pin>` (C6 env: 8, the onboard LED). Pin and `RGB_NUMBER` are compile-time template parameters of `FastLED.addLeds<WS2812B, RGB_DEFAULT_PIN, GRB>`, so the `pin`/`number` parameters of `action=begin` are ignored. `begin` must precede `brightness` (0-255) and `color` (6-char hex `RRGGBB`).
+The onboard LED shows what the firmware is doing. Four colours and rhythms, and only four, so that they can be told apart across a room:
+
+| Mode | LED |
+|---|---|
+| the five-second pause after power-up, and every connect attempt | blue, 1 s on / 1 s off |
+| own access point up, waiting to be set up | blue, steady |
+| on the network | green, dark for 100 ms every 3 s |
+| network lost, reconnecting (the first two minutes) | red, 250 ms on / 250 ms off |
+| hardware error: the access point did not start, or flash would not take a write | red, 1 s on / 1 s off |
+
+All of them blink except the steady blue of the access point, so on a board that is connecting, online or lost a frozen picture means frozen firmware; the green heartbeat is there for exactly that. The rhythm is driven from `loop()`, so a blocked `loop()` shows up too.
+
+`Blinker` holds the rhythms and knows nothing about the network - `Connectivity` translates `WifiLink`'s state into a colour and a pattern. The colour reaches the hardware through a `LedDriver`: `RgbLedDriver<PIN>` (WS2812B, built with `-DRGB_DEFAULT_PIN=<pin>`) or `GpioLedDriver` (a plain LED, built with `-DSTATUS_LED_PIN=<pin>`, any non-black colour means "lit"). A board with neither gets a driver that does nothing.
+
+The WS2812B is driven by the core's RMT, initialised once and written asynchronously - not by FastLED, and not by the core's own `rgbLedWrite()`. Both of those cost the bench its responsiveness: with FastLED, one run in eight had a request waiting about a second while a pulse was running; `rgbLedWrite()` re-initialises RMT on every write and still gave outliers of 250-580 ms. With RMT set up once and `rmtWriteAsync()`, ten runs gave no outlier above 210 ms, with a median of 12 ms. The measurement is in [wifi.md](wifi.md#measurements). FastLED is no longer a dependency.
+
+Status brightness is 24 of 255: the WS2812B on the SuperMini at full brightness is painful to look at.
+
+`POST /rgb action=begin` takes the LED away from the status display and gives it to the bench, `action=status` gives it back, and so does a reboot. Colours set by the bench are stored, not written: the LED is touched only from `loop()`, never from the server's task.
 
 ## Logging (`src/logging.h`)
 

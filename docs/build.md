@@ -75,23 +75,38 @@ the config, where it survives into the repository and outlives the cause.
 
 ## Environments
 
-- **ESP8266** (`nodemcuv2`): `espressif8266@4.2.1`, `ESPAsyncTCP`, ESP Async WebServer 1.2.3.
-- **ESP32-C6** (`esp32-c6-super-mini`, default): pioarduino `platform-espressif32`, `AsyncTCP`, mathieucarbou/ESPAsyncWebServer fork (v3.3.15, C6 support), FastLED.
+- **ESP8266** (`nodemcuv2`): `espressif8266@4.2.1`, ESP32Async `ESPAsyncTCP` 2.0.0, ESP32Async `ESPAsyncWebServer` 3.12.1 - the same web server as the C6 has, instead of the five-year-old fork the project used before.
+- **ESP32-C6** (`esp32-c6-super-mini`, default): pioarduino `platform-espressif32` 55.03.312-1 (Arduino core 3.3.12), ESP32Async `AsyncTCP` 3.5.0, ESP32Async `ESPAsyncWebServer` 3.12.1. No LED library: the WS2812 is driven by the core's RMT.
 - **native**: host-only, runs `test/test_ntp_packet` (see [testing.md](testing.md)).
 
 ## WiFi credentials
 
-Copy `secrets.ini.template` to `secrets.ini` (git-ignored) and fill in `wifi_ssid` / `wifi_password`. They are compiled in as `SSID_NAME` / `SSID_PASS` build flags, so the network is fixed at **build time**: the board joins whatever was in the file when it was flashed. Reflashing with different credentials moves the board to another network and address, and a harness addressing it by IP simply stops getting answers - there is no error to see. Check the file before every upload.
+Copy `secrets.ini.template` to `secrets.ini` (git-ignored) and fill in `wifi_ssid` / `wifi_password`. They are compiled in as `SSID_NAME` / `SSID_PASS` build flags and are the board's **default** network.
+
+A network set through the setup page or `POST /wifi action=set` is saved in the board's own flash (NVS on ESP32, EEPROM on ESP8266) and **overrides the compiled one**, including after a reflash - flashing does not erase NVS. So a board that has been set up by hand keeps that network until:
+
+```bash
+curl -X POST http://<board ip>/wifi -d action=forget   # back to secrets.ini
+```
+
+The boot line says which one is in force: `wifi: ssid <name> (build)` or `(saved)`. `GET /wifi` answers the same in its `source` field. If a board ignores the credentials you just flashed, that line is where you find out why.
+
+Credentials never leave the board: the password is not in `GET /wifi`, not on the page and not in the console.
 
 ## After flashing
 
-At boot the board prints to the USB console at 115200: protocol version, the SSID it is joining, and the IP, MAC, gateway and mask it got. The SSID line is the only place the compiled-in network is visible; the MAC is there so the address can be pinned on the router (an SSID shared by two access points puts the board on whichever answers first).
+At boot the board prints to the USB console at 115200: the protocol version, then one line with the network it will join, where that network came from, whether a channel is saved for a fast connect, its MAC and the name of its own access point. The MAC is there so the address can be pinned on the router.
 
-If WiFi fails, the board says `WiFi not connected: starting the server, the core keeps trying` and carries on: every route is registered and the server is listening, it just has no address yet. The console then carries the network state on its own - `wifi: disconnected, reason 201 NO_AP_FOUND` when it drops, one summary line a minute while it stays down, `wifi: back after N s and M attempts, ip ...` when it returns. `curl http://<ip>/version` confirms the board is serving.
+The first connect attempt is at five seconds, the second at fifteen, and if both fail the board raises its own access point at about twenty-five seconds and says so with the address of the setup page. The server is up the whole time, it just has no address on the router yet.
+
+While the network is down the console carries it: `wifi: disconnected, reason 201 NO_AP_FOUND` at the moment it happens, one summary line a minute after that, and the address when it comes back. The LED says the same without a console (see [architecture.md](architecture.md#status-led)), and `curl http://<ip>/version` confirms the board is serving.
+
+Moving the board to another network without a cable: connect a phone to `METF-XXXX` (open), the setup page opens by itself, pick the network, type its password, and the page shows the new address of the board when it joins. Holding BOOT for three seconds raises that access point on demand.
 
 ## Build flags and protocol version
 
-- `METF_VERSION` comes from `metf_version` in the `[env]` section of `platformio.ini` - one place for both boards. Bump it when the HTTP protocol changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`. `test/board` checks the minimum version it needs (`test_protocol_version`).
+- `METF_VERSION` comes from `metf_version` in the `[env]` section of `platformio.ini` - one place for both boards. Bump it when the HTTP protocol changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202`, 9 added `/wifi` and the setup page and gave `/rgb` the `status` action. `test/board` checks the minimum version it needs (`test_protocol_version`).
 - Both envs set `LOG_LEVEL_DEBUG` and `SSID_NAME` / `SSID_PASS`.
-- The C6 env also sets `ESP32_C6_env`, `ARDUINO_USB_MODE=1` (native USB Serial/JTAG; the C6 has no USB-OTG), `ARDUINO_USB_CDC_ON_BOOT=1` (`Serial` → USB CDC), `ASB_BUFFER_BYTES=65536`, `ASB_MAX_LINE_LEN=128`, `RGB_DEFAULT_PIN=8`, `RGB_NUMBER=1`.
-- What `ASB_*` and `RGB_*` do: [architecture.md](architecture.md).
+- The C6 env also sets `ESP32_C6_env`, `ARDUINO_USB_MODE=1` (native USB Serial/JTAG; the C6 has no USB-OTG), `ARDUINO_USB_CDC_ON_BOOT=1` (`Serial` → USB CDC), `ASB_BUFFER_BYTES=65536`, `ASB_MAX_LINE_LEN=128`, `RGB_DEFAULT_PIN=8` (the onboard WS2812B, driven by the core's RMT - no LED library at all) and `BUTTON_PIN=9` (BOOT).
+- The NodeMCU env sets `STATUS_LED_PIN=2` (the module's blue LED, lit by a low level) and `BUTTON_PIN=0` (FLASH). Both pins then belong to the firmware: a bench that needs GPIO 2 or GPIO 0 for the device under test must drop the flag, otherwise the status LED and the test drive the same line.
+- What `ASB_*`, `RGB_DEFAULT_PIN`, `STATUS_LED_PIN` and `BUTTON_PIN` do: [architecture.md](architecture.md).

@@ -4,12 +4,12 @@
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 #endif
 
+// Массивы строк намеренно не обнуляются: кольцо пусто (head_ == tail_), и до
+// первой записи никто их не читает, а обнуление 64 КБ на старте - это время,
+// за которое UART испытуемого успеет прислать данные.
+// cppcheck-suppress uninitMemberVar
 AsyncSerialBuffer::AsyncSerialBuffer()
-  : cur_len_(0), head_(0), tail_(0), dropped_(0) {
-  // Опционально обнулить содержимое:
-  // memset(lines_, 0, sizeof(lines_));
-  // memset(current_, 0, sizeof(current_));
-}
+  : cur_len_(0), head_(0), tail_(0), dropped_(0) {}
 
 void AsyncSerialBuffer::flush() {
   LOCK();
@@ -45,7 +45,7 @@ void AsyncSerialBuffer::push_line_locked_unchecked() {
   // по логу её не видно: считаем её здесь, наружу отдаёт /read/stat
   if (full_unsafe()) {
     tail_ = inc(tail_);
-    dropped_++;
+    dropped_ = dropped_ + 1;   // ++ по volatile в C++20 устарел
   }
 
   // Скопировать строку в кольцевой буфер и продвинуть head

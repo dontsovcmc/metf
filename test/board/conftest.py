@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -53,6 +54,21 @@ class Board:
         request = urllib.request.Request(url, data=body, method='POST')
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
             return answer.read().decode()
+
+    def post_raw(self, path: str, params: dict[str, Any]) -> tuple[int, str]:
+        """POST, который не бросает на 4xx/5xx: (код, тело).
+
+        Отказ - такая же часть протокола, как успех, и проверять его нужно
+        по коду и тексту, а не по исключению.
+        """
+        url = f'http://{self.host}{path}'
+        body = urllib.parse.urlencode(params).encode()
+        request = urllib.request.Request(url, data=body, method='POST')
+        try:
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
+                return answer.status, answer.read().decode()
+        except urllib.error.HTTPError as err:
+            return err.code, err.read().decode()
 
 
 @pytest.fixture(scope='session')

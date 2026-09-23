@@ -7,6 +7,8 @@ Firmware that turns an ESP8266 or ESP32-C6 board into a test bench controlled ov
 - record its serial log and read it back;
 - give it the time over NTP, with no internet needed (ESP32 only).
 
+Moved to another room? The board raises its own access point when it cannot find the network, and a phone sets the new one from a web page - no reflashing.
+
 Supported boards: ESP32-C6 SuperMini (default build) and NodeMCU (ESP8266).
 
 ## Quick start
@@ -18,7 +20,11 @@ pio device monitor --port /dev/cu.usbmodemXXXX   # the board prints its IP at bo
 curl http://<ip>/version
 ```
 
-The WiFi network is compiled into the firmware, so check `secrets.ini` before each upload. Details: [docs/build.md](docs/build.md). How the board behaves when that network is missing, and what it says about it: [docs/wifi.md](docs/wifi.md).
+The network from `secrets.ini` is the default one. If the board cannot reach it, it raises its own open access point named `METF-XXXX` about 25 seconds after power-up: connect a phone to it, the setup page opens by itself, pick a network and the board saves it. A saved network overrides the compiled one until `POST /wifi action=forget`. Holding the BOOT button for 3 seconds raises the access point on demand.
+
+The onboard LED says what is going on: blue blinking - connecting, blue steady - the access point is up and waiting, green with a beat - on the network, red - the network is lost or the hardware failed.
+
+Details: [docs/build.md](docs/build.md) for building and credentials, [docs/wifi.md](docs/wifi.md) for the network algorithm, its timings and what happens when the network disappears. The access point and the setup page are walked by a stand of their own - a second board plays the phone: [Utils/hil/README.md](Utils/hil/README.md).
 
 ## URLs
 
@@ -31,14 +37,17 @@ Full reference with every parameter and response: [docs/api.md](docs/api.md).
 | [`/pinMode`](docs/api.md#post-pinmode) | POST | set pin mode |
 | [`/digitalRead`](docs/api.md#get-digitalread) | GET | read a pin |
 | [`/digitalWrite`](docs/api.md#post-digitalwrite) | POST | write a pin |
-| [`/pulse`](docs/api.md#post-pulse) | POST | drive a pin for N ms, then release it; other routes keep answering meanwhile |
+| [`/pulse`](docs/api.md#post-pulse) | POST | drive a pin for N ms, then release it; answers at once, the client times the wait |
 | [`/i2c`](docs/api.md#post-i2c) | POST | I2C: `begin`, `setClock`, `setClockStretchLimit`, `ask`, `flush` |
 | [`/serial`](docs/api.md#post-serial) | POST | DUT UART speed, clear the log |
 | [`/read`](docs/api.md#get-read) | GET | take the recorded serial log |
 | [`/read/stat`](docs/api.md#get-readstat) | GET | log buffer state, including lost lines |
 | [`/ntp`](docs/api.md#post-ntp) | POST | NTP server: `start`, `time`, `stop`, `drop` (ESP32) |
 | [`/ntp/stat`](docs/api.md#get-ntpstat) | GET | NTP server state and counters (ESP32) |
-| [`/rgb`](docs/api.md#post-rgb) | POST | onboard WS2812B LED: `begin`, `brightness`, `color` (ESP32) |
+| [`/rgb`](docs/api.md#post-rgb) | POST | onboard LED: `begin`, `brightness`, `color`, `status` |
+| [`/wifi`](docs/api.md#get-wifi) | GET | network state: mode, address, signal, outage |
+| [`/wifi`](docs/api.md#post-wifi) | POST | network: `set`, `forget`, `ap`, `scan` |
+| [`/`](docs/api.md#get-) | GET | setup page: pick a network and enter its password |
 
 ## Examples
 
