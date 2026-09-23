@@ -155,14 +155,14 @@ void WifiLink::loop() {
     poll_button(now);
     poll_scan();
 
-    const bool ap_up = ap_active();
-    ap_up_.store(ap_up);
+    const Radio r = look();
+    ap_up_.store(r.ap_up);
     WifiPolicy::Facts f;
     f.has_creds = !store_.creds().empty();
     f.has_fast = store_.fast().valid();
-    f.connected = got_ip_.load() && WiFi.status() == WL_CONNECTED;
-    f.ap_up = ap_up;
-    f.ap_clients = ap_up ? WiFi.softAPgetStationNum() : 0;
+    f.connected = r.connected;
+    f.ap_up = r.ap_up;
+    f.ap_clients = r.ap_clients;
 
     const uint32_t down_events = down_events_.load();
     if (down_events != seen_down_events_) {
@@ -180,7 +180,27 @@ void WifiLink::loop() {
     failed_attempts_.store(policy_.failed_attempts());
 
     follow_channel(now);
-    publish_status(now, f);
+    publish_status(now, r);
+}
+
+/*
+Взгляд на радио - один на такт.
+
+«В сети» - это годный адрес, а не только событие о нём: ядро 3.3.12 успевает
+отдать localIP() == 0.0.0.0 уже после GOT_IP и при WL_CONNECTED. Окно
+короткое, но снимок его ловит.
+*/
+WifiLink::Radio WifiLink::look() const {
+    Radio r;
+    r.ap_up = ap_active();
+    r.sta_up = (WiFi.getMode() & WIFI_STA) != 0;
+    r.ap_clients = r.ap_up ? static_cast<uint8_t>(WiFi.softAPgetStationNum()) : 0;
+    r.channel = radio_channel();
+    r.ip = WiFi.localIP();
+    r.connected = got_ip_.load() && WiFi.status() == WL_CONNECTED &&
+                  static_cast<uint32_t>(r.ip) != 0;
+    if (r.connected) r.rssi = static_cast<int8_t>(WiFi.RSSI());
+    return r;
 }
 
 void WifiLink::apply_commands(uint32_t now) {
@@ -456,9 +476,9 @@ WifiLink::Status WifiLink::status() const {
 а задача сервера обслуживает все соединения платы: спрашивать радио оттуда
 значит занимать её на время ответа SDK.
 */
-void WifiLink::publish_status(uint32_t now, const WifiPolicy::Facts &f) {
-    const bool changed = f.connected != status_.connected || f.ap_up != status_.ap_up ||
-                         f.ap_clients != status_.ap_clients ||
+void WifiLink::publish_status(uint32_t now, const Radio &r) {
+    const bool changed = r.connected != status_.connected || r.ap_up != status_.ap_up ||
+                         r.ap_clients != status_.ap_clients ||
                          policy_.state() != status_.state ||
                          scan_running_.load() != status_.scanning;
     if (!changed && !elapsed(now, status_at_, kStatusPeriodMs)) return;
@@ -466,23 +486,23 @@ void WifiLink::publish_status(uint32_t now, const WifiPolicy::Facts &f) {
 
     Status s;
     s.state = policy_.state();
-    s.connected = f.connected;
-    s.sta_up = (WiFi.getMode() & WIFI_STA) != 0;
+    s.connected = r.connected;
+    s.sta_up = r.sta_up;
     s.hw_error = hw_error();
     s.ssid = store_.creds().ssid;
     s.from_nvs = store_.creds().from_nvs;
     s.fast = store_.fast().valid();
     s.ap_ssid = ap_ssid_;
-    s.ap_up = f.ap_up;
-    s.ap_clients = f.ap_clients;
+    s.ap_up = r.ap_up;
+    s.ap_clients = r.ap_clients;
     s.ap_ip = ap_ip_;
     s.scanning = scan_running_.load();
-    if (f.connected) {
-        s.ip = WiFi.localIP();
-        s.rssi = static_cast<int8_t>(WiFi.RSSI());
+    if (r.connected) {
+        s.ip = r.ip;
+        s.rssi = r.rssi;
     }
-    s.channel = radio_channel();
-    s.offline_s = f.connected ? 0 : (now - down_since_.load()) / 1000;
+    s.channel = r.channel;
+    s.offline_s = r.connected ? 0 : (now - down_since_.load()) / 1000;
     s.failed_attempts = policy_.failed_attempts();
     s.last_reason = last_reason_.load();
     s.pending = pending_set_.load() || pending_forget_.load() || pending_ap_.load() ||

@@ -138,8 +138,28 @@ private:
 #endif
     };
 
+    /*
+    Один взгляд на радио: всё, что о нём спрашивают за такт, снимается подряд
+    и в одном месте.
+
+    Иначе снимок состояния склеивается из разных моментов. Так и было:
+    «подключён» брали до того, как политика начнёт действовать, а адрес и
+    уровень - после. Команда forget сама рвёт связь, и наружу уходило
+    «подключён, адрес 0.0.0.0» - стенд по такому адресу плату теряет.
+    */
+    struct Radio {
+        bool connected = false;
+        bool sta_up = false;
+        bool ap_up = false;
+        uint8_t ap_clients = 0;
+        uint8_t channel = 0;
+        int8_t rssi = 0;
+        IPAddress ip;
+    };
+
     bool ap_active() const; // по железу, а не по своему флагу
-    void publish_status(uint32_t now, const WifiPolicy::Facts &f);
+    Radio look() const;
+    void publish_status(uint32_t now, const Radio &r);
     void subscribe_events();
     void apply_commands(uint32_t now);
     void poll_button(uint32_t now);
