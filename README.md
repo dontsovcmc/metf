@@ -7,7 +7,7 @@ Firmware that turns an ESP8266 or ESP32-C6 board into a test bench controlled ov
 - record its serial log and read it back;
 - give it the time over NTP, with no internet needed (ESP32 only).
 
-Moved to another room? The board raises its own access point when it cannot find the network, and a phone sets the new one from a web page - no reflashing.
+Everything above is served over HTTP by the board itself. Moved to another room? It raises its own access point when it cannot find the network, and a phone sets the new one from a web page - no reflashing.
 
 Supported boards: ESP32-C6 SuperMini (default build) and NodeMCU (ESP8266).
 
@@ -22,9 +22,31 @@ curl http://<ip>/version
 
 The network from `secrets.ini` is the default one. If the board cannot reach it, it raises its own open access point named `METF-XXXX` about 25 seconds after power-up: connect a phone to it, the setup page opens by itself, pick a network and the board saves it. A saved network overrides the compiled one until `POST /wifi action=forget`. Holding the BOOT button for 3 seconds raises the access point on demand.
 
-The onboard LED says what is going on: blue blinking - connecting, blue steady - the access point is up and waiting, green with a beat - on the network, red - the network is lost or the hardware failed.
-
 Details: [docs/build.md](docs/build.md) for building and credentials, [docs/wifi.md](docs/wifi.md) for the network algorithm, its timings and what happens when the network disappears. The access point and the setup page are walked by a stand of their own - a second board plays the phone: [Utils/hil/README.md](Utils/hil/README.md).
+
+## Web server and captive portal
+
+The board is an asynchronous HTTP server, and it starts before the network does: the socket is bound at boot rather than after a connection, so the board answers the moment it has an address. Every URL below is served by it, and so is the setup page at `/`.
+
+While the board's own access point is up, it also runs a DNS server that answers every name with its own address, and replies to the probes Android, iOS and Windows send to find out whether a network has internet. The phone concludes it has not and opens the setup page by itself - nothing to type. The page is plain HTML with no JavaScript, because the captive browser on iOS would not run it.
+
+The page lists the networks the board can see, takes a password and shows the new address once the board is on the network. It is reachable from the ordinary network too, at `http://<ip>/`, so the network can be changed without leaving the bench.
+
+## Status LED
+
+The onboard LED shows what the firmware is doing. Four colours and rhythms, and only four, so that they can be told apart across a room:
+
+| Mode | LED |
+|---|---|
+| the five-second pause after power-up, and every connect attempt | blue, 1 s on / 1 s off |
+| own access point up, waiting to be set up | blue, steady |
+| on the network | green, dark for 100 ms every 3 s |
+| network lost, reconnecting (the first two minutes) | red, 250 ms on / 250 ms off |
+| hardware error: the access point did not start, or flash would not take a write | red, 1 s on / 1 s off |
+
+All of them blink except the steady blue of the access point. So on a board that is connecting, online or lost, a frozen picture means frozen firmware - the green heartbeat exists for exactly that. The rhythm is driven from the main loop, so a blocked loop shows up too.
+
+`POST /rgb action=begin` takes the LED away from this display and gives it to the bench; `action=status` gives it back, and so does a reboot. On a board with a plain LED instead of an RGB one the same rhythms are shown without colour. How it is wired and why it is driven the way it is: [docs/architecture.md](docs/architecture.md#status-led).
 
 ## URLs
 

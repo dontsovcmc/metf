@@ -99,7 +99,7 @@ At boot the board prints to the USB console at 115200: the protocol version, the
 
 The first connect attempt is at five seconds, the second at fifteen, and if both fail the board raises its own access point at about twenty-five seconds and says so with the address of the setup page. The server is up the whole time, it just has no address on the router yet.
 
-While the network is down the console carries it: `wifi: disconnected, reason 201 NO_AP_FOUND` at the moment it happens, one summary line a minute after that, and the address when it comes back. The LED says the same without a console (see [architecture.md](architecture.md#status-led)), and `curl http://<ip>/version` confirms the board is serving.
+While the network is down the console carries it: `wifi: disconnected, reason 201 NO_AP_FOUND` at the moment it happens, one summary line a minute after that, and the address when it comes back. The LED says the same without a console (see [README](../README.md#status-led)), and `curl http://<ip>/version` confirms the board is serving.
 
 Moving the board to another network without a cable: connect a phone to `METF-XXXX` (open), the setup page opens by itself, pick the network, type its password, and the page shows the new address of the board when it joins. Holding BOOT for three seconds raises that access point on demand.
 
