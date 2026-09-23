@@ -248,7 +248,7 @@ Counters are not reset by `stop`/`start`; compare values before and after.
 
 ## RGB LED
 
-The onboard LED normally shows what the firmware is doing (colours and rhythms: [architecture.md](architecture.md#status-led)). `POST /rgb` takes it away from that and gives it to the bench.
+The onboard LED normally shows what the firmware is doing (colours and rhythms: [README](../README.md#status-led)). `POST /rgb` takes it away from that and gives it to the bench.
 
 Built for the ESP32-C6 with `RGB_DEFAULT_PIN` (its onboard WS2812B on GPIO 8) and for a plain LED with `STATUS_LED_PIN` (the NodeMCU build drives GPIO 2, which has no colour: any non-black colour means "lit").
 

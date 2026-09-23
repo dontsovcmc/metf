@@ -143,19 +143,13 @@ UDP server on port 123 that answers the DUT with whatever time the test assigned
 
 ESP8266 has no AsyncUDP in its core, hence the `#ifdef ESP32`.
 
-## Status LED (`src/blinker.*`, `src/*_led_driver.h`)
+## Status LED
 
-The onboard LED shows what the firmware is doing. Four colours and rhythms, and only four, so that they can be told apart across a room:
+`src/blinker.*`, `src/*_led_driver.h`.
 
-| Mode | LED |
-|---|---|
-| the five-second pause after power-up, and every connect attempt | blue, 1 s on / 1 s off |
-| own access point up, waiting to be set up | blue, steady |
-| on the network | green, dark for 100 ms every 3 s |
-| network lost, reconnecting (the first two minutes) | red, 250 ms on / 250 ms off |
-| hardware error: the access point did not start, or flash would not take a write | red, 1 s on / 1 s off |
+What each colour and rhythm means is in the [README](../README.md#status-led): it is what a person standing over the board needs, not an internal detail. Here - how it is built, and why.
 
-All of them blink except the steady blue of the access point, so on a board that is connecting, online or lost a frozen picture means frozen firmware; the green heartbeat is there for exactly that. The rhythm is driven from `loop()`, so a blocked `loop()` shows up too.
+Every mode blinks except the steady blue of the access point, and that is deliberate: on a board that is connecting, online or lost, a frozen picture means frozen firmware, and the green heartbeat exists for exactly that. The rhythm is driven from `loop()`, so a blocked `loop()` shows up too.
 
 `Blinker` holds the rhythms and knows nothing about the network - `Connectivity` translates `WifiLink`'s state into a colour and a pattern. The colour reaches the hardware through a `LedDriver`: `RgbLedDriver<PIN>` (WS2812B, built with `-DRGB_DEFAULT_PIN=<pin>`) or `GpioLedDriver` (a plain LED, built with `-DSTATUS_LED_PIN=<pin>`, any non-black colour means "lit"). A board with neither gets a driver that does nothing.
 
