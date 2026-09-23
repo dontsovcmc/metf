@@ -52,6 +52,8 @@ CHUNK = 1024                 # столько байт забираем за о�
 RE_STATE = re.compile(r'\+CWSTATE:(\d+)')
 RE_IP = re.compile(r'\+CIPSTA:ip:"([\d.]+)"')
 RE_STAMAC = re.compile(r'\+CIPSTAMAC:"([0-9a-fA-F:]{17})"')
+# +CWJAP:"<ssid>","<bssid>",<channel>,<rssi>,... - ответ на AT+CWJAP? в сети
+RE_JOINED = re.compile(r'\+CWJAP:"([^"]*)"')
 RE_RECVLEN = re.compile(r'\+CIPRECVLEN:(\d+)')
 # +CWLAP:(<ecn>,"<ssid>",<rssi>,"<mac>",<channel>,...); ecn=0 - открытая сеть
 RE_LAP = re.compile(r'\+CWLAP:\((\d+),"([^"]*)",(-?\d+),"[^"]*",(\d+)')
@@ -265,6 +267,20 @@ class AtBoard:
             out.append({'ssid': m.group(2), 'rssi': int(m.group(3)),
                         'channel': int(m.group(4)), 'open': m.group(1) == '0'})
         return out
+
+    def joined_to(self) -> str:
+        """
+        Имя сети, в которой плата сейчас, или пустая строка.
+
+        Нужно, чтобы тест мог убедиться в своей обстановке, не пересоздавая её:
+        вход в точку стоит секунд, а этот вопрос - одной команды. Не в сети -
+        прошивка отвечает `No AP`, и это не ошибка.
+        """
+        with contextlib.suppress(AtError):
+            m = RE_JOINED.search(self.cmd('AT+CWJAP?', timeout=5))
+            if m:
+                return m.group(1)
+        return ''
 
     def ip(self) -> str:
         m = RE_IP.search(self.cmd('AT+CIPSTA?'))

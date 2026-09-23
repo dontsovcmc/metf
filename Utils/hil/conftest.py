@@ -105,20 +105,43 @@ class Client:
     машина) и изнутри точки доступа платы или роутера (AT-плата). Ответы
     платы и ожидания одинаковы, разный только транспорт - он и переопределяется
     в наследнике.
+
+    Сколько плата имеет права молчать - свойство транспорта, а не команды:
+    прямой запрос по сети стенда укладывается в секунды, а тот же запрос через
+    проброс порта на роутере идёт заметно дольше. Поэтому срок живёт в клиенте,
+    и каждый вид на плату знает свой.
     """
 
     host = ''
+    timeout = HTTP_TIMEOUT
 
-    def get(self, path: str, timeout: float = HTTP_TIMEOUT) -> Answer:
+    def get(self, path: str, timeout: float | None = None) -> Answer:
         raise NotImplementedError
 
-    def post(self, path: str, timeout: float = HTTP_TIMEOUT, **params: Any) -> Answer:
+    def post(self, path: str, timeout: float | None = None, **params: Any) -> Answer:
         raise NotImplementedError
 
     def wifi(self) -> dict[str, Any]:
-        return json.loads(self.get('/wifi').text)
+        """
+        Состояние платы - и проверка, что оно не противоречит себе.
 
-    def alive(self, timeout: float = 1.0) -> bool:
+        Снимок собирается в прошивке из многих вопросов к радио, и если
+        задать их в разные моменты, наружу уходит «подключена, адрес
+        0.0.0.0». Такую плату стенд теряет: он ходит к ней по адресу.
+        Проверка стоит здесь, а не в отдельном тесте, нарочно: через неё
+        проходит каждый опрос каждого теста, то есть сотни снимков за
+        прогон, включая те самые переходы, на которых снимок и разъезжался.
+        """
+        state = json.loads(self.get('/wifi').text)
+        joined = state.get('connected')
+        address = state.get('ip', '')
+        assert not (joined and address in ('', '0.0.0.0')), (
+            f'плата говорит «в сети», а адреса нет: {state}')
+        assert joined or address in ('', '0.0.0.0'), (
+            f'плата говорит «не в сети», а адрес называет: {state}')
+        return state
+
+    def alive(self, timeout: float = 3.0) -> bool:
         try:
             return self.get('/ping', timeout=timeout).text.strip() == 'pong'
         except TRANSPORT_ERRORS:
@@ -161,16 +184,18 @@ class Client:
 class Metf(Client):
     """Плата из сети стенда: обычный HTTP с рабочей машины."""
 
-    def __init__(self, host: str) -> None:
+    def __init__(self, host: str, timeout: float = HTTP_TIMEOUT) -> None:
         self.host = host
+        self.timeout = timeout
 
-    def get(self, path: str, timeout: float = HTTP_TIMEOUT) -> Answer:
-        return self._send(urllib.request.Request(f'http://{self.host}{path}'), timeout)
+    def get(self, path: str, timeout: float | None = None) -> Answer:
+        return self._send(urllib.request.Request(f'http://{self.host}{path}'),
+                          timeout or self.timeout)
 
-    def post(self, path: str, timeout: float = HTTP_TIMEOUT, **params: Any) -> Answer:
+    def post(self, path: str, timeout: float | None = None, **params: Any) -> Answer:
         body = urllib.parse.urlencode(params).encode()
         request = urllib.request.Request(f'http://{self.host}{path}', data=body, method='POST')
-        return self._send(request, timeout)
+        return self._send(request, timeout or self.timeout)
 
     @staticmethod
     def _send(request: urllib.request.Request, timeout: float) -> Answer:
@@ -190,16 +215,19 @@ class Phone(Client):
     NAT управляемого роутера.
     """
 
+    timeout = 30.0    # через AT-плату разговор идёт по одной команде за раз
+
     def __init__(self, board: AtBoard, host: str) -> None:
         self.board = board
         self.host = host
 
-    def get(self, path: str, timeout: float = 30.0) -> Answer:
-        return _answer(self.board.get(path, self.host, timeout=timeout))
+    def get(self, path: str, timeout: float | None = None) -> Answer:
+        return _answer(self.board.get(path, self.host, timeout=timeout or self.timeout))
 
-    def post(self, path: str, timeout: float = 30.0, **params: Any) -> Answer:
+    def post(self, path: str, timeout: float | None = None, **params: Any) -> Answer:
         body = urllib.parse.urlencode(params).encode()
-        return _answer(self.board.post(path, self.host, body=body, timeout=timeout))
+        return _answer(self.board.post(path, self.host, body=body,
+                                       timeout=timeout or self.timeout))
 
 
 def _answer(response: Any) -> Answer:
