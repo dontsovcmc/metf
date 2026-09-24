@@ -57,11 +57,28 @@ public:
   void pushChar(char c);
 
   // Вывести все накопленные строки в Stream как есть (без добавления символов).
-  // После вывода буфер считается пустым.
+  // После вывода буфер считается пустым. Устаревший способ: ответ, не доехавший
+  // до читателя, уносит строки навсегда - плата уже считает их отданными.
   void drain_to(Print& out);
+
+  // Вывести строки после подтверждённой и вернуть номер последней выведенной.
+  //
+  // Строки нумеруются подряд с единицы, номер растёт всю жизнь платы. Читатель
+  // присылает номер, который у него уже есть: всё до него включительно кольцо
+  // забывает, остальное печатает и **придерживает**. Не доехавший ответ теперь
+  // ничего не стоит - читатель повторит запрос с тем же номером и получит то же
+  // самое окно.
+  uint32_t read_to(Print& out, uint32_t acked);
+
+  // Номер последней принятой строки: сколько их прошло через кольцо за всю
+  // жизнь платы, включая вытесненные.
+  uint32_t seq() const;
 
 private:
   inline size_t inc(size_t x) const { return (x + 1) % ASB_MAX_LINES; }
+  inline size_t count_unsafe() const {
+    return (head_ >= tail_) ? (head_ - tail_) : (ASB_MAX_LINES - (tail_ - head_));
+  }
   inline bool full_unsafe() const   { return inc(head_) == tail_; }
   void push_line();
   void push_line_locked_unchecked();
@@ -73,6 +90,7 @@ private:
   volatile size_t head_;                          // индекс записи
   volatile size_t tail_;                          // индекс чтения
   volatile uint32_t dropped_;                     // вытеснено строк с flush()
+  volatile uint32_t pushed_;                      // принято строк за всю жизнь
 
   // Нельзя копировать
   AsyncSerialBuffer(const AsyncSerialBuffer&) = delete;

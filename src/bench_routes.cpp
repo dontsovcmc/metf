@@ -18,6 +18,7 @@ const char *const PARAM_VALUE = "value";
 const char *const PARAM_DURATION_MS = "duration_ms";
 const char *const PARAM_MODE = "mode";
 const char *const PARAM_ACTION = "action";
+const char *const PARAM_ACK = "ack";
 const char *const PARAM_SDA_PIN = "sda_pin";
 const char *const PARAM_SCL_PIN = "scl_pin";
 const char *const PARAM_ADDRESS = "address";
@@ -394,6 +395,7 @@ void BenchRoutes::on_serial(AsyncWebServerRequest *request) {
 // читателю верить нельзя.
 void BenchRoutes::on_read_stat(AsyncWebServerRequest *request) {
     const String out = "{\"lines\":" + String(static_cast<uint32_t>(asb_.count())) +
+                       ",\"seq\":" + String(asb_.seq()) +
                        ",\"dropped\":" + String(asb_.dropped()) + ",\"baud\":" + String(baud_) +
                        ",\"capacity\":" + String(static_cast<uint32_t>(ASB_MAX_LINES - 1)) +
                        ",\"line_len\":" + String(static_cast<uint32_t>(ASB_MAX_LINE_LEN)) +
@@ -402,14 +404,31 @@ void BenchRoutes::on_read_stat(AsyncWebServerRequest *request) {
     http::reply(request, 200, "application/json", out);
 }
 
-// GET /read - слить накопленные строки без добавления разделителей
+// GET /read[?ack=<номер>] - отдать накопленные строки без добавления разделителей
+//
+// С `ack` кольцо забывает строки по номер включительно и придерживает
+// остальные: не доехавший ответ повторяется тем же запросом и отдаёт то же
+// окно. Номер последней строки ответа - в заголовке X-Log-Seq.
+//
+// Без `ack` - прежнее поведение: отдать и сразу забыть. Оставлено для
+// клиентов протокола 11 и ручного curl; строки при потере ответа пропадают.
 void BenchRoutes::on_read(AsyncWebServerRequest *request) {
     // Буфер сразу на весь лог: по умолчанию он 1460 байт и на каждой добавке
     // перекладывает всё, что уже накоплено, - на 64 КБ это десятки мегабайт
     // копирования за один /read
     AsyncResponseStream *res = request->beginResponseStream(
         "text/plain; charset=utf-8", (size_t)ASB_MAX_LINES * ASB_MAX_LINE_LEN);
-    asb_.drain_to(*res);
+
+    const AsyncWebParameter *ack = http::param_any(request, PARAM_ACK);
+    uint32_t seq;
+    if (ack) {
+        seq = asb_.read_to(*res, static_cast<uint32_t>(strtoul(ack->value().c_str(), nullptr, 10)));
+    } else {
+        asb_.drain_to(*res);
+        seq = asb_.seq();
+    }
+
+    res->addHeader(http::LOG_SEQ_HEADER, String(seq));
     http::stamp(res);
     request->send(res);
 }

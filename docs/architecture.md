@@ -102,7 +102,7 @@ On the C6, `setup()` waits 2 s before printing because the USB CDC comes up afte
 | `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timed by the ESP on a `Ticker`, answered at once with `202`; 8 pins can pulse at once, `409` for a pin already pulsing |
 | `POST /i2c` | `action=begin/setClock/setClockStretchLimit/ask/flush`; `ask` takes `address`, `hexstring`, `response` (bytes to read) and returns hex |
 | `POST /serial` | `baudrate` (allow-listed in `kAllowedBauds`) and `flush=1`. A missing `baudrate` means 115200, so a flush-only call resets the speed |
-| `GET /read`, `GET /read/stat` | drain the serial log; ring state as JSON (`lines`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`) |
+| `GET /read`, `GET /read/stat` | read the serial log (`ack=<n>` confirms what the reader already has, so the board can keep the rest); ring state as JSON (`lines`, `seq`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`) |
 | `POST /ntp`, `GET /ntp/stat` | ESP32 only, see below |
 | `POST /rgb` | the status LED, taken over by the bench; needs `RGB_DEFAULT_PIN` or `STATUS_LED_PIN` |
 | `GET /`, `GET /wifi`, `POST /wifi` | the setup page and the network API; plus the captive-portal probes, which redirect a client of the board's own access point to `/` |

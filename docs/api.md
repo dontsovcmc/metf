@@ -1,6 +1,6 @@
 # HTTP API
 
-Protocol version **11** (`GET /version`). The board serves plain HTTP on port 80.
+Protocol version **12** (`GET /version`). The board serves plain HTTP on port 80.
 
 - POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string.
 - Numbers are decimal: `address=72`, not `0x48`.
@@ -29,7 +29,7 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer.
+Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer, 12 gave `/read` the `ack` parameter and the `X-Log-Seq` header, so the board keeps lines until the reader confirms them.
 
 ### X-Uptime-Ms
 
@@ -199,21 +199,37 @@ The fields may be sent in the body or in the query string. The answer is `Set 96
 
 ### GET /read
 
-Returns every complete line received since the previous read and empties the buffer. Each line ends with `\n`; `\r` is dropped. A line still being received (no newline yet) stays for the next read.
+Returns every complete line received since the previous read. Each line ends with `\n`; `\r` is dropped. A line still being received (no newline yet) stays for the next read.
 
 A line longer than `line_len - 1` characters is split into several lines; the reader has to glue them back.
+
+Every answer carries the number of its last line in the `X-Log-Seq` header. Lines are numbered from 1 and the counter keeps growing for the life of the board, evicted lines included.
+
+| Request | What the board does with the lines it just handed out |
+|---|---|
+| `GET /read?ack=<n>` | forgets everything up to `n`, **keeps** what it returns |
+| `GET /read` | forgets them at once |
+
+**Use `ack`.** Without it a lost answer costs the lines for good: the board marks them read while the response is still being assembled, and the `200` cannot confirm anything - it arrives after the sending and may be lost itself. With `ack` the reader repeats the same request and gets the same window again.
+
+The reader sends back the `X-Log-Seq` it received; `ack=0` confirms nothing. A number larger than anything in the ring simply empties it - that is what a reader that outlived a reboot of the board sends.
+
+Lines held for confirmation take up ring space. The reader is expected to confirm on its next request; a reader that stops confirming will see `dropped` grow.
+
+The plain form stays for protocol 11 readers and for `curl` by hand.
 
 ### GET /read/stat
 
 State of the buffer as JSON:
 
 ```json
-{"lines":12,"dropped":0,"baud":115200,"capacity":511,"line_len":128,"bytes":65536}
+{"lines":12,"seq":345,"dropped":0,"baud":115200,"capacity":511,"line_len":128,"bytes":65536}
 ```
 
 | Field | Meaning |
 |---|---|
-| `lines` | lines waiting to be read |
+| `lines` | lines waiting to be read, including those held for confirmation |
+| `seq` | number of the last line the board accepted |
 | `dropped` | lines evicted since the last flush because the ring was full |
 | `baud` | current UART speed |
 | `capacity` | how many lines the ring holds |
