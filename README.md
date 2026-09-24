@@ -63,7 +63,7 @@ Full reference with every parameter and response: [docs/api.md](docs/api.md).
 | [`/pulse`](docs/api.md#post-pulse) | POST | drive a pin for N ms, then release it; answers at once, the client times the wait |
 | [`/i2c`](docs/api.md#post-i2c) | POST | I2C: `begin`, `setClock`, `setClockStretchLimit`, `ask`, `flush` |
 | [`/serial`](docs/api.md#post-serial) | POST | DUT UART speed, clear the log |
-| [`/read`](docs/api.md#get-read) | GET | take the recorded serial log |
+| [`/read`](docs/api.md#get-read) | GET | take the recorded serial log; with `ack=<n>` the board keeps the lines until the reader confirms them |
 | [`/read/stat`](docs/api.md#get-readstat) | GET | log buffer state, including lost lines |
 | [`/ntp`](docs/api.md#post-ntp) | POST | NTP server: `start`, `time`, `stop`, `drop` (ESP32) |
 | [`/ntp/stat`](docs/api.md#get-ntpstat) | GET | NTP server state and counters (ESP32) |

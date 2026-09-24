@@ -64,6 +64,12 @@ class Board:
         except urllib.error.HTTPError as err:
             return dict(err.headers)
 
+    def get_full(self, path: str) -> tuple[str, dict[str, str]]:
+        """Тело и заголовки одним запросом: у `/read` они друг без друга бессмысленны."""
+        url = f'http://{self.host}{path}'
+        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as answer:
+            return answer.read().decode(), dict(answer.headers)
+
     def post_raw(self, path: str, params: dict[str, Any]) -> tuple[int, str]:
         """POST, который не бросает на 4xx/5xx: (код, тело).
 

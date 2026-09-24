@@ -9,7 +9,7 @@ portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 // за которое UART испытуемого успеет прислать данные.
 // cppcheck-suppress uninitMemberVar
 AsyncSerialBuffer::AsyncSerialBuffer()
-  : cur_len_(0), head_(0), tail_(0), dropped_(0) {}
+  : cur_len_(0), head_(0), tail_(0), dropped_(0), pushed_(0) {}
 
 void AsyncSerialBuffer::flush() {
   LOCK();
@@ -25,6 +25,11 @@ size_t AsyncSerialBuffer::count() const {
   size_t t = tail_;
   UNLOCK();
   return (h >= t) ? (h - t) : (ASB_MAX_LINES - (t - h));
+}
+
+uint32_t AsyncSerialBuffer::seq() const {
+  // Без блокировки, как и dropped(): одно выровненное 32-битное поле.
+  return pushed_;
 }
 
 uint32_t AsyncSerialBuffer::dropped() const {
@@ -51,6 +56,7 @@ void AsyncSerialBuffer::push_line_locked_unchecked() {
   // Скопировать строку в кольцевой буфер и продвинуть head
   strncpy(lines_[head_], current_, ASB_MAX_LINE_LEN);
   head_ = inc(head_);
+  pushed_ = pushed_ + 1;     // ++ по volatile в C++20 устарел
   cur_len_ = 0;
 }
 
@@ -97,4 +103,35 @@ void AsyncSerialBuffer::drain_to(Print& out) {
   LOCK();
   tail_ = h;
   UNLOCK();
+}
+
+uint32_t AsyncSerialBuffer::read_to(Print& out, uint32_t acked) {
+  // Забыть подтверждённое и снять снимок - одной критической секцией: между
+  // двумя UART успевает положить строку, и номера разъедутся.
+  LOCK();
+  const uint32_t last = pushed_;
+  size_t cnt = count_unsafe();
+  if (cnt) {
+    const uint32_t first = last - static_cast<uint32_t>(cnt) + 1;
+    // Сравнение разностью, а не «больше»: номер 32-битный и однажды переполнится
+    if (static_cast<int32_t>(acked - first) >= 0) {
+      const uint32_t drop = (static_cast<int32_t>(acked - last) >= 0)
+                                ? static_cast<uint32_t>(cnt)
+                                : (acked - first + 1);
+      tail_ = (tail_ + drop) % ASB_MAX_LINES;
+      cnt -= drop;
+    }
+  }
+  size_t t = tail_;
+  const size_t h = head_;
+  UNLOCK();
+
+  // Печать без сдвига хвоста: строки остаются на плате, пока читатель не
+  // подтвердит их следующим запросом
+  while (t != h) {
+    out.print(lines_[t]);
+    out.print('\n');
+    t = inc(t);
+  }
+  return last;
 }
