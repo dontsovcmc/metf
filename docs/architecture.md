@@ -97,6 +97,7 @@ On the C6, `setup()` waits 2 s before printing because the USB CDC comes up afte
 | Route | Notes |
 |---|---|
 | `GET /ping`, `GET /version` | connectivity; protocol version |
+| every answer | header `X-Uptime-Ms`: `millis()` since boot, stamped in `http::reply` / `http::stamp` (`http_util.cpp`). A bench spots a restart by a value smaller than the one before |
 | `POST /pinMode`, `GET /digitalRead`, `POST /digitalWrite` | GPIO |
 | `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timed by the ESP on a `Ticker`, answered at once with `202`; 8 pins can pulse at once, `409` for a pin already pulsing |
 | `POST /i2c` | `action=begin/setClock/setClockStretchLimit/ask/flush`; `ask` takes `address`, `hexstring`, `response` (bytes to read) and returns hex |
