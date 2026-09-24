@@ -56,6 +56,7 @@ Full reference with every parameter and response: [docs/api.md](docs/api.md).
 |---|---|---|
 | [`/ping`](docs/api.md#get-ping) | GET | connectivity check, answers `pong` |
 | [`/version`](docs/api.md#get-version) | GET | protocol version |
+| every answer | — | header [`X-Uptime-Ms`](docs/api.md#x-uptime-ms): ms since the board booted; a smaller value than before means it restarted |
 | [`/pinMode`](docs/api.md#post-pinmode) | POST | set pin mode |
 | [`/digitalRead`](docs/api.md#get-digitalread) | GET | read a pin |
 | [`/digitalWrite`](docs/api.md#post-digitalwrite) | POST | write a pin |

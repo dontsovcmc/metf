@@ -24,6 +24,26 @@ baudrate, и flush молча не применялись: клиент шлёт
 */
 const AsyncWebParameter *param_any(AsyncWebServerRequest *request, const char *name);
 
+/*
+Аптайм платы в каждом ответе. По нему стенд узнаёт, что плата перезагрузилась:
+уменьшилось - значит был старт заново. Иначе отличить перезагрузку от занятости
+неоткуда - `offline_s` в /wifi считается и с потери сети, и с загрузки.
+
+`millis()` переполняется через 49 суток; стенд трактует уменьшение как
+перезагрузку, поэтому раз в 49 суток непрерывной работы будет ложная.
+*/
+constexpr const char *UPTIME_HEADER = "X-Uptime-Ms";
+
+/*
+Ответ с аптаймом. Через него идут все обработчики: централизовать нечем -
+`DefaultHeaders` хранит только постоянные значения, а middleware веб-сервера
+работает до того, как обработчик создаст ответ.
+*/
+void reply(AsyncWebServerRequest *request, int code, const char *type, const String &body);
+
+/* То же для потоковых ответов, которые обработчик создаёт сам. */
+void stamp(AsyncWebServerResponse *res);
+
 void send_400(AsyncWebServerRequest *request, Error err, const String &name);
 void send_500(AsyncWebServerRequest *request, const String &what);
 

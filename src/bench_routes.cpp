@@ -59,7 +59,7 @@ void BenchRoutes::loop() {
 void BenchRoutes::attach(AsyncWebServer &server) {
     server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *request) {
         LOG_INFO("GET /ping");
-        request->send(200, "text/plain", "pong");
+        http::reply(request, 200, "text/plain", "pong");
     });
 
     server.on("/pinMode", HTTP_POST, [this](AsyncWebServerRequest *r) { on_pin_mode(r); });
@@ -83,7 +83,7 @@ void BenchRoutes::attach(AsyncWebServer &server) {
 #endif
 
     server.on("/version", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(200, "text/plain", METF_VERSION);
+        http::reply(request, 200, "text/plain", METF_VERSION);
     });
 }
 
@@ -104,7 +104,7 @@ void BenchRoutes::on_pin_mode(AsyncWebServerRequest *request) {
     const auto mode = static_cast<uint8_t>(form(request, PARAM_MODE).toInt());
 
     pinMode(pin, mode);
-    request->send(200, "text/plain", "OK");
+    http::reply(request, 200, "text/plain", "OK");
 }
 
 // GET /digitalRead?pin=<n>
@@ -115,7 +115,7 @@ void BenchRoutes::on_digital_read(AsyncWebServerRequest *request) {
     }
 
     const auto pin = static_cast<uint8_t>(request->getParam(PARAM_PIN)->value().toInt());
-    request->send(200, "text/plain", digitalRead(pin) == HIGH ? "1" : "0");
+    http::reply(request, 200, "text/plain", digitalRead(pin) == HIGH ? "1" : "0");
 }
 
 // POST /digitalWrite  form: pin=<n>&value=<HIGH, LOW>
@@ -133,7 +133,7 @@ void BenchRoutes::on_digital_write(AsyncWebServerRequest *request) {
     const auto value = static_cast<uint8_t>(form(request, PARAM_VALUE).toInt());
 
     digitalWrite(pin, value);
-    request->send(200, "text/plain", "OK");
+    http::reply(request, 200, "text/plain", "OK");
 }
 
 // ---------------------------------------------------------------- импульс
@@ -177,13 +177,13 @@ void BenchRoutes::on_pulse(AsyncWebServerRequest *request) {
     // Отказ - про вывод, а не про плату: по соседнему выводу импульс идти
     // может и должен
     if (pulse_slot_of(pin) >= 0) {
-        request->send(409, "text/plain", "pulse in progress");
+        http::reply(request, 409, "text/plain", "pulse in progress");
         return;
     }
 
     const int slot = pulse_slot_free();
     if (slot < 0) {
-        request->send(503, "text/plain", "no free pulse timer");
+        http::reply(request, 503, "text/plain", "no free pulse timer");
         return;
     }
 
@@ -210,7 +210,7 @@ void BenchRoutes::on_pulse(AsyncWebServerRequest *request) {
     // отсчитывает от ответа паузу между импульсами, и эта добавка съела
     // запас проверки слипания: два замыкания через 0,3 с attiny обязан
     // слить в один импульс, пока не прошло 750 мс, а выходило 636 мс.
-    request->send(202, "text/plain", String(ms));
+    http::reply(request, 202, "text/plain", String(ms));
 }
 
 // ---------------------------------------------------------------- I2C
@@ -338,7 +338,7 @@ void BenchRoutes::on_i2c(AsyncWebServerRequest *request) {
         }
 
         LOG_INFO("Received: " << hexstring);
-        request->send(200, "text/plain", hexstring);
+        http::reply(request, 200, "text/plain", hexstring);
         return;
 
     } else if (action == "flush") {
@@ -348,7 +348,7 @@ void BenchRoutes::on_i2c(AsyncWebServerRequest *request) {
         send_400(request, Error::IncorrectValue, PARAM_ACTION);
         return;
     }
-    request->send(200, "text/plain", "OK");
+    http::reply(request, 200, "text/plain", "OK");
 }
 
 // ---------------------------------------------------------------- UART испытуемого
@@ -363,7 +363,7 @@ void BenchRoutes::on_serial(AsyncWebServerRequest *request) {
     }
 
     if (nb == 0 || !is_allowed_baud(nb)) {
-        request->send(400, "text/plain; charset=utf-8", "Invalid speed");
+        http::reply(request, 400, "text/plain; charset=utf-8", "Invalid speed");
         return;
     }
 
@@ -386,7 +386,7 @@ void BenchRoutes::on_serial(AsyncWebServerRequest *request) {
         out += ", flush buffer";
     }
 
-    request->send(200, "text/plain; charset=utf-8", out);
+    http::reply(request, 200, "text/plain; charset=utf-8", out);
 }
 
 // GET /read/stat - состояние кольца лога: сколько строк лежит, сколько
@@ -399,7 +399,7 @@ void BenchRoutes::on_read_stat(AsyncWebServerRequest *request) {
                        ",\"line_len\":" + String(static_cast<uint32_t>(ASB_MAX_LINE_LEN)) +
                        ",\"bytes\":" +
                        String(static_cast<uint32_t>(ASB_MAX_LINES) * ASB_MAX_LINE_LEN) + "}";
-    request->send(200, "application/json", out);
+    http::reply(request, 200, "application/json", out);
 }
 
 // GET /read - слить накопленные строки без добавления разделителей
@@ -410,6 +410,7 @@ void BenchRoutes::on_read(AsyncWebServerRequest *request) {
     AsyncResponseStream *res = request->beginResponseStream(
         "text/plain; charset=utf-8", (size_t)ASB_MAX_LINES * ASB_MAX_LINE_LEN);
     asb_.drain_to(*res);
+    http::stamp(res);
     request->send(res);
 }
 
@@ -427,7 +428,7 @@ void BenchRoutes::on_ntp_stat(AsyncWebServerRequest *request) {
                        ",\"ignored\":" + String(st.ignored) +
                        ",\"last_epoch\":" + String(st.last_epoch) + ",\"last_client\":\"" +
                        st.last_client.toString() + "\"" + "}";
-    request->send(200, "application/json", out);
+    http::reply(request, 200, "application/json", out);
 }
 
 /*
@@ -460,7 +461,7 @@ void BenchRoutes::on_ntp(AsyncWebServerRequest *request) {
         if (action == "time") {
             ntp_.set_time(epoch);
         } else if (!ntp_.begin(epoch)) {
-            request->send(500, "text/plain", "unable to listen on udp 123");
+            http::reply(request, 500, "text/plain", "unable to listen on udp 123");
             return;
         }
     } else if (action == "stop") {
@@ -476,6 +477,6 @@ void BenchRoutes::on_ntp(AsyncWebServerRequest *request) {
         return;
     }
 
-    request->send(200, "text/plain", "ok");
+    http::reply(request, 200, "text/plain", "ok");
 }
 #endif // ESP32

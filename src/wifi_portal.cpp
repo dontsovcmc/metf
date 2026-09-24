@@ -103,13 +103,13 @@ void WifiPortal::attach(AsyncWebServer &server) {
     // одному маршруту, сервер отдаёт сюда, а здесь клиент точки получает
     // редирект на страницу - и система открывает её сама.
     server.onNotFound([this](AsyncWebServerRequest *r) {
-        if (!handle_not_found(r)) r->send(404, "text/plain", "Not found");
+        if (!handle_not_found(r)) http::reply(r, 404, "text/plain", "Not found");
     });
 
     // Кроме одного: без ответа на wpad.dat Windows спрашивает его бесконечно,
     // а редирект её не устраивает
     server.on("/wpad.dat", HTTP_ANY,
-              [](AsyncWebServerRequest *r) { r->send(404, "text/plain", "Not found"); });
+              [](AsyncWebServerRequest *r) { http::reply(r, 404, "text/plain", "Not found"); });
 }
 
 void WifiPortal::loop() {
@@ -205,6 +205,7 @@ void WifiPortal::on_page(AsyncWebServerRequest *request) {
                  "<button name=\"action\" value=\"forget\">Сеть из прошивки</button></form>"));
     res->printf("<p><small>Точка платы: %s. METF %s.</small></p></body></html>",
                 html_escape(s.ap_ssid).c_str(), METF_VERSION);
+    http::stamp(res);
     request->send(res);
 }
 
@@ -250,7 +251,7 @@ void WifiPortal::on_status(AsyncWebServerRequest *request) {
     out += ",\"pending\":";
     out += s.pending ? "true" : "false";
     out += "}";
-    request->send(200, "application/json", out);
+    http::reply(request, 200, "application/json", out);
 }
 
 /*
@@ -290,7 +291,7 @@ void WifiPortal::on_command(AsyncWebServerRequest *request) {
             return;
         }
         if (!link_.request_set(ssid.c_str(), password.c_str())) {
-            request->send(409, "text/plain", "previous command in progress");
+            http::reply(request, 409, "text/plain", "previous command in progress");
             return;
         }
         LOG_INFO("POST /wifi action=set ssid=" << ssid);
@@ -311,6 +312,6 @@ void WifiPortal::on_command(AsyncWebServerRequest *request) {
     if (ui) {
         request->redirect("/");
     } else {
-        request->send(202, "text/plain", "accepted");
+        http::reply(request, 202, "text/plain", "accepted");
     }
 }

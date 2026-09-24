@@ -55,6 +55,15 @@ class Board:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
             return answer.read().decode()
 
+    def headers(self, path: str) -> dict[str, str]:
+        """Заголовки ответа, включая отказ: у 404 они такие же, как у успеха."""
+        url = f'http://{self.host}{path}'
+        try:
+            with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as answer:
+                return dict(answer.headers)
+        except urllib.error.HTTPError as err:
+            return dict(err.headers)
+
     def post_raw(self, path: str, params: dict[str, Any]) -> tuple[int, str]:
         """POST, который не бросает на 4xx/5xx: (код, тело).
 

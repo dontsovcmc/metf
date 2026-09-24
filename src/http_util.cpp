@@ -8,22 +8,32 @@ const AsyncWebParameter *param_any(AsyncWebServerRequest *request, const char *n
     return nullptr;
 }
 
+void stamp(AsyncWebServerResponse *res) {
+    res->addHeader(UPTIME_HEADER, String(millis()));
+}
+
+void reply(AsyncWebServerRequest *request, int code, const char *type, const String &body) {
+    AsyncWebServerResponse *res = request->beginResponse(code, type, body);
+    stamp(res);
+    request->send(res);
+}
+
 void send_400(AsyncWebServerRequest *request, Error err, const String &name) {
     switch (err) {
     case Error::NoGetParam:
-        request->send(400, "text/plain", "parameter '" + name + "' not found");
+        reply(request, 400, "text/plain", "parameter '" + name + "' not found");
         break;
     case Error::NoFormParam:
-        request->send(400, "text/plain", "post form parameter '" + name + "' not found");
+        reply(request, 400, "text/plain", "post form parameter '" + name + "' not found");
         break;
     case Error::IncorrectValue:
-        request->send(400, "text/plain", "parameter '" + name + "' is incorrect");
+        reply(request, 400, "text/plain", "parameter '" + name + "' is incorrect");
         break;
     }
 }
 
 void send_500(AsyncWebServerRequest *request, const String &what) {
-    request->send(500, "text/plain", what);
+    reply(request, 500, "text/plain", what);
 }
 
 } // namespace http

@@ -1,6 +1,6 @@
 # HTTP API
 
-Protocol version **9** (`GET /version`). The board serves plain HTTP on port 80.
+Protocol version **11** (`GET /version`). The board serves plain HTTP on port 80.
 
 - POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string.
 - Numbers are decimal: `address=72`, not `0x48`.
@@ -29,7 +29,22 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `9`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action.
+Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer.
+
+### X-Uptime-Ms
+
+Every answer carries `X-Uptime-Ms`: milliseconds since the board booted, taken
+from `millis()`.
+
+A bench keeps the last value it saw. A smaller value than the one before means
+the board restarted between the two requests - and that a restart is the likely
+reason for whatever else looks wrong: the log ring was emptied, the NTP server
+went off, pins went back to inputs. Nothing else tells a restart from a board
+that was merely busy: `offline_s` in `GET /wifi` counts from the loss of the
+network **or** from boot, and the counters next to it are reset by a restart too.
+
+The value wraps after 49 days of uptime, which a bench reads as one false
+restart.
 
 ## Network
 
