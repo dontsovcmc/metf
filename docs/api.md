@@ -1,6 +1,6 @@
 # HTTP API
 
-Protocol version **12** (`GET /version`). The board serves plain HTTP on port 80.
+Protocol version **13** (`GET /version`). The board serves plain HTTP on port 80.
 
 - POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string.
 - Numbers are decimal: `address=72`, not `0x48`.
@@ -29,7 +29,7 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer, 12 gave `/read` the `ack` parameter and the `X-Log-Seq` header, so the board keeps lines until the reader confirms them.
+Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer, 12 gave `/read` the `ack` parameter and the `X-Log-Seq` header, so the board keeps lines until the reader confirms them, 13 added `overruns` to `GET /read/stat` - the times the UART driver buffer overflowed, a hole the ring counter cannot see.
 
 ### X-Uptime-Ms
 
@@ -223,7 +223,7 @@ The plain form stays for protocol 11 readers and for `curl` by hand.
 State of the buffer as JSON:
 
 ```json
-{"lines":12,"seq":345,"dropped":0,"baud":115200,"capacity":511,"line_len":128,"bytes":65536}
+{"lines":12,"seq":345,"dropped":0,"overruns":0,"baud":115200,"capacity":511,"line_len":128,"bytes":65536}
 ```
 
 | Field | Meaning |
@@ -231,12 +231,17 @@ State of the buffer as JSON:
 | `lines` | lines waiting to be read, including those held for confirmation |
 | `seq` | number of the last line the board accepted |
 | `dropped` | lines evicted since the last flush because the ring was full |
+| `overruns` | times the UART driver buffer overflowed (ESP32; always 0 elsewhere) |
 | `baud` | current UART speed |
 | `capacity` | how many lines the ring holds |
 | `line_len` | characters per line, including the terminator |
 | `bytes` | total size of the ring |
 
-**`dropped > 0` means the log has a hole in it.** Eviction is silent: a test reading the log after that sees a shorter log, not an error, and goes green for the wrong reason. Check the counter before trusting the log.
+**`dropped > 0` or `overruns > 0` means the log has a hole in it.** Both losses are silent: a test reading the log after that sees a shorter log, not an error, and goes green for the wrong reason. Check both counters before trusting the log.
+
+They are different holes. `dropped` is the ring: the reader was too slow, and the oldest lines were overwritten. `overruns` is earlier than that - `loop()` was too slow to drain the UART, the driver buffer filled up and bytes never reached the ring at all. The ring cannot count what it never saw, so `dropped` stays at zero while the log loses whole lines. The densest burst in a device log is the head of a session, which is why a missing session start is the usual symptom.
+
+The driver buffer is 4096 bytes (`kRxBufferBytes` in `bench_routes.h`), about 355 ms at 115200.
 
 Capacity is set at build time: 99 lines of 60 on ESP8266, 511 lines of 128 on ESP32-C6. See `ASB_*` in [build.md](build.md).
 

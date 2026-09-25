@@ -12,6 +12,8 @@ GPIO и импульсы, I2C, UART испытуемого с кольцом л�
 #include <ESPAsyncWebServer.h>
 #include <Ticker.h>
 
+#include <atomic>
+
 #include "AsyncSerialBuffer.h"
 #ifdef ESP32
 #include "NtpServer.h"
@@ -46,11 +48,35 @@ private:
     */
     static constexpr int kPulseSlots = 8;
 
+    /*
+    Приёмный буфер UART испытуемого.
+
+    Голова сеанса - самый плотный залп во всём логе устройства: полсотни строк
+    за треть секунды, около 2,8 КБ. Умолчание ядра - 256 байт
+    (`HardwareSerial.cpp`, `_rxBufferSize(256)`), а это на 115200 всего 22 мс:
+    стоит loop() задержаться на радио дольше - и байты пропадают в драйвере,
+    до кольца, где их не считает никто. Четыре килобайта держат 355 мс.
+    */
+    static constexpr size_t kRxBufferBytes = 4096;
+
     struct PulseSlot {
         Ticker timer;
         volatile bool busy = false;
         uint8_t pin = 0;
     };
+
+    /*
+    Поставить счётчик переполнений драйвера на UART испытуемого.
+
+    Отдельным методом по двум причинам. `HardwareSerial::end()` снимает
+    обработчик (`_onReceiveErrorCB = NULL`), а смена скорости через /serial идёт
+    именно через end()+begin() - без повторной постановки счётчик замолчал бы
+    после первой же смены, и молчание было бы неотличимо от «переполнений не
+    было». И звать это можно только вне LOCK(): обработчик создаёт задачу
+    событий (`_createEventTask`), а LOCK() на ESP32 - спинлок с запретом
+    прерываний; проверено на плате - она уходит в перезагрузку.
+    */
+    void watch_overruns();
 
     void pulse_end(int slot);
     int pulse_slot_of(uint8_t pin) const;   // слот, занятый этим выводом, или -1
@@ -72,6 +98,8 @@ private:
     HardwareSerial &dut_;
     AsyncSerialBuffer asb_;
     uint32_t baud_;
+    // Считает драйвер в своей задаче, читает обработчик запроса - отсюда atomic
+    std::atomic<uint32_t> overruns_{0};
     PulseSlot pulse_[kPulseSlots];
 #ifdef ESP32
     NtpServer ntp_;
