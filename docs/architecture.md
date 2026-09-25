@@ -102,7 +102,7 @@ On the C6, `setup()` waits 2 s before printing because the USB CDC comes up afte
 | `POST /pulse` | drive `pin` to `value` for `duration_ms`, then release to INPUT (high-Z); timed by the ESP on a `Ticker`, answered at once with `202`; 8 pins can pulse at once, `409` for a pin already pulsing |
 | `POST /i2c` | `action=begin/setClock/setClockStretchLimit/ask/flush`; `ask` takes `address`, `hexstring`, `response` (bytes to read) and returns hex |
 | `POST /serial` | `baudrate` (allow-listed in `kAllowedBauds`) and `flush=1`. A missing `baudrate` means 115200, so a flush-only call resets the speed |
-| `GET /read`, `GET /read/stat` | read the serial log (`ack=<n>` confirms what the reader already has, so the board can keep the rest); ring state as JSON (`lines`, `seq`, `dropped`, `baud`, `capacity`, `line_len`, `bytes`) |
+| `GET /read`, `GET /read/stat` | read the serial log (`ack=<n>` confirms what the reader already has, so the board can keep the rest); ring state as JSON (`lines`, `seq`, `dropped`, `overruns`, `baud`, `capacity`, `line_len`, `bytes`) |
 | `POST /ntp`, `GET /ntp/stat` | ESP32 only, see below |
 | `POST /rgb` | the status LED, taken over by the bench; needs `RGB_DEFAULT_PIN` or `STATUS_LED_PIN` |
 | `GET /`, `GET /wifi`, `POST /wifi` | the setup page and the network API; plus the captive-portal probes, which redirect a client of the board's own access point to `/` |
@@ -128,6 +128,7 @@ Ring of fixed-size lines filled from `loop()` and drained by `/read`.
 - Defaults (6000 / 60) suit the ESP8266. `esp32-c6-super-mini` uses 65536 / 128 → 511 usable lines, so a full Waterius session fits without eviction.
 - Longer lines are split into several buffer lines; the reader has to glue them back.
 - When full, the oldest line is evicted and counted in `dropped()` (reset by `flush()`, exposed by `/read/stat`). Eviction is otherwise silent, and a silently shortened log makes tests green for the wrong reason - `dropped > 0` means the log has a hole.
+- A hole can also open before the ring: `loop()` drains the UART, and if it is late the driver's own buffer overflows and bytes never reach `pushChar` at all. The ring cannot count what it never saw, so that loss is invisible in `dropped`. Hence two defences in `BenchRoutes::start_uart`: a 4096-byte driver buffer (`kRxBufferBytes`, about 355 ms at 115200 against the core's 256-byte default) and an `onReceiveError` counter reported as `overruns`. `HardwareSerial::end()` clears the callback, so the baud switch goes through the same `start_uart`.
 - `LOCK()` / `UNLOCK()` defined here are the project's critical section: a FreeRTOS spinlock (`portENTER_CRITICAL(&mux)`) on ESP32, `noInterrupts()` on ESP8266. `BenchRoutes` reuses them for baud switching. On ESP32 they disable interrupts, so keep them short and don't take them for a single aligned word (see `dropped()`).
 
 ## NTP server (`src/NtpServer.*`, `src/ntp_packet.h`) - ESP32 only

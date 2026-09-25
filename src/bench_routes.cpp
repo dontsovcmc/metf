@@ -49,7 +49,25 @@ String form(AsyncWebServerRequest *request, const char *name) {
 
 BenchRoutes::BenchRoutes(HardwareSerial &dut) : dut_(dut), baud_(kDefaultBaud) {}
 
-void BenchRoutes::begin() { dut_.begin(baud_); }
+void BenchRoutes::watch_overruns() {
+#ifdef ESP32
+    // Потерянное драйвером иначе невидимо: dropped считает только вытесненное
+    // из кольца, а до кольца байты уже не дошли. Без этого счётчика «в логе
+    // дыры нет» - вера, а не утверждение
+    dut_.onReceiveError([this](hardwareSerial_error_t err) {
+        if (err == UART_BUFFER_FULL_ERROR || err == UART_FIFO_OVF_ERROR) {
+            overruns_.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+#endif
+}
+
+void BenchRoutes::begin() {
+    // Запас до того, как драйвер начнёт терять байты: см. kRxBufferBytes
+    dut_.setRxBufferSize(kRxBufferBytes);
+    dut_.begin(baud_);
+    watch_overruns();
+}
 
 void BenchRoutes::loop() {
     while (dut_.available() > 0) {
@@ -372,9 +390,13 @@ void BenchRoutes::on_serial(AsyncWebServerRequest *request) {
         // Короткая критическая секция: останавливаем приём и переключаем UART
         LOCK();
         dut_.end();
+        dut_.setRxBufferSize(kRxBufferBytes);
         dut_.begin(nb);
         baud_ = nb;
         UNLOCK();
+
+        // Только вне критической секции: обработчик создаёт задачу событий
+        watch_overruns();
 
         out = "Set " + String(nb) + " baudrate";
     } else {
@@ -391,12 +413,16 @@ void BenchRoutes::on_serial(AsyncWebServerRequest *request) {
 }
 
 // GET /read/stat - состояние кольца лога: сколько строк лежит, сколько
-// вытеснено, на какой скорости читаем UART. dropped > 0 - в логе дыра,
-// читателю верить нельзя.
+// вытеснено, сколько раз переполнялся приёмный буфер UART, на какой скорости
+// читаем. dropped > 0 или overruns > 0 - в логе дыра, читателю верить нельзя.
+// Это разные беды: первая - кольцо не успел разобрать читатель, вторая - loop()
+// не успел разобрать драйвер, и строки не дошли даже до кольца.
 void BenchRoutes::on_read_stat(AsyncWebServerRequest *request) {
     const String out = "{\"lines\":" + String(static_cast<uint32_t>(asb_.count())) +
                        ",\"seq\":" + String(asb_.seq()) +
-                       ",\"dropped\":" + String(asb_.dropped()) + ",\"baud\":" + String(baud_) +
+                       ",\"dropped\":" + String(asb_.dropped()) +
+                       ",\"overruns\":" + String(overruns_.load(std::memory_order_relaxed)) +
+                       ",\"baud\":" + String(baud_) +
                        ",\"capacity\":" + String(static_cast<uint32_t>(ASB_MAX_LINES - 1)) +
                        ",\"line_len\":" + String(static_cast<uint32_t>(ASB_MAX_LINE_LEN)) +
                        ",\"bytes\":" +
