@@ -253,13 +253,15 @@ void BenchRoutes::on_digital_write(AsyncWebServerRequest *request) {
 // ---------------------------------------------------------------- импульс
 
 void BenchRoutes::pulse_arm(const int slot, const uint32_t ms) {
+    PulseSlot &s = pulse_[slot];
+    s.turn ^= 1;                        // не тот, из чьего колбэка нас позвали
 #ifdef ESP8266
     // не SYS-контекст, а loop()
-    pulse_[slot].timer.once_ms_scheduled(ms, [this, slot]() { pulse_tick(slot); });
+    s.timer[s.turn].once_ms_scheduled(ms, [this, slot]() { pulse_tick(slot); });
 #else
     // ESP32: таймер ядра зовёт из задачи esp_timer, а не из loop(), поэтому
     // фронты не ждут ни HTTP-запросов, ни вычитывания UART испытуемого
-    pulse_[slot].timer.once_ms(ms, [this, slot]() { pulse_tick(slot); });
+    s.timer[s.turn].once_ms(ms, [this, slot]() { pulse_tick(slot); });
 #endif
 }
 

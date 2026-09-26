@@ -65,6 +65,25 @@ def test_протокол_не_старше_четырнадцатого(board: 
         'на плате прошивка старше: она не умеет пачку фронтов')
 
 
+def test_пачка_не_роняет_плату(board: Any, idle: None) -> None:
+    """
+    Переставить таймер из его собственного колбэка нельзя: Ticker при этом
+    удаляет свой esp_timer и подменяет функцию, которую исполняет. Плата на
+    таком уходила в перезагрузку посреди пачки, а отличить перезагрузку от
+    занятости можно только по аптайму (протокол 11).
+    """
+    before = int(board.headers('/ping')['X-Uptime-Ms'])
+
+    code, answer = board.post_json('/pulse', {
+        'lines': [{'pin': FREE_PIN, 'value': 0, 'edges': SHAPE}]})
+    assert code == 202, answer
+    time.sleep(SHAPE_MS / 1000.0 + RELEASE_MARGIN_S)
+
+    after = int(board.headers('/ping')['X-Uptime-Ms'])
+    assert after > before, (
+        f'аптайм упал с {before} до {after}: плата перезагрузилась на пачке')
+
+
 def test_пачка_принимается_сразу_и_называет_свою_длину(board: Any, idle: None) -> None:
     started = time.monotonic()
     code, answer = board.post_json('/pulse', {
