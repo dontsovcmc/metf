@@ -1,5 +1,6 @@
 #include "bench_routes.h"
 
+#include <AsyncJson.h>
 #include <Wire.h>
 
 #include "http_util.h"
@@ -45,6 +46,79 @@ String form(AsyncWebServerRequest *request, const char *name) {
     return request->getParam(name, true)->value();
 }
 
+/*
+Тело JSON в пачку. Отказ - словами в `what`: про форму сигнала клиенту надо
+знать, что именно в ней не так, а не только что она не годится.
+
+Правила пачки (сколько линий и участков, нулевые длительности, дубли выводов)
+проверяет wave::check - здесь только то, чего в ней не видно: чего в теле нет
+вовсе и что в нём не число.
+*/
+// Необязательное число: нет в теле - остаётся умолчание, есть не числом -
+// отказ. Мусор в форме сигнала лучше отвергнуть, чем подать не то
+bool opt_uint(JsonVariant value, uint32_t &out, const char *name, String &what) {
+    if (value.isNull()) return true;
+    if (!value.is<uint32_t>()) {
+        what = String(name) + " is not a number";
+        return false;
+    }
+    out = value.as<uint32_t>();
+    return true;
+}
+
+bool parse_batch(JsonVariant &json, wave::Batch &batch, String &what) {
+    JsonArray lines = json["lines"].as<JsonArray>();
+    if (lines.isNull()) {
+        what = "no lines array";
+        return false;
+    }
+
+    batch.count = 0;
+    for (JsonVariant item : lines) {
+        if (batch.count >= wave::kMaxLines) {
+            what = "too many lines";
+            return false;
+        }
+        if (!item["pin"].is<uint32_t>()) {
+            what = "line without pin";
+            return false;
+        }
+
+        JsonArray edges = item["edges"].as<JsonArray>();
+        if (edges.isNull()) {
+            what = "line without edges";
+            return false;
+        }
+
+        uint32_t value = 0;
+        uint32_t at_ms = 0;
+        if (!opt_uint(item["value"], value, "value", what)) return false;
+        if (!opt_uint(item["at_ms"], at_ms, "at_ms", what)) return false;
+
+        wave::Line &line = batch.lines[batch.count];
+        line.pin = item["pin"].as<uint8_t>();
+        line.value = value ? 1 : 0;
+        line.at_ms = at_ms;
+        line.count = 0;
+
+        for (JsonVariant edge : edges) {
+            if (line.count >= wave::kMaxEdges) {
+                what = "too many edges";
+                return false;
+            }
+            if (!edge.is<uint32_t>()) {
+                what = "edge is not a number of ms";
+                return false;
+            }
+            line.edges[line.count++] = edge.as<uint32_t>();
+        }
+
+        batch.count++;
+    }
+
+    return true;
+}
+
 } // namespace
 
 BenchRoutes::BenchRoutes(HardwareSerial &dut) : dut_(dut), baud_(kDefaultBaud) {}
@@ -85,6 +159,27 @@ void BenchRoutes::attach(AsyncWebServer &server) {
     server.on("/digitalRead", HTTP_GET, [this](AsyncWebServerRequest *r) { on_digital_read(r); });
     server.on("/digitalWrite", HTTP_POST,
               [this](AsyncWebServerRequest *r) { on_digital_write(r); });
+    /*
+    Форма сигнала - телом JSON, и обработчик строго на точный адрес и только на
+    POST. По умолчанию адрес совпадает и с префиксом (`/pulse/stat`), а canHandle
+    у JSON-обработчика пропускает любой GET независимо от типа тела: вместе это
+    отобрало бы у расписки её собственный маршрут.
+    */
+    auto *shape = new AsyncCallbackJsonWebHandler(
+        AsyncURIMatcher::exact("/pulse"),
+        [this](AsyncWebServerRequest *r, JsonVariant &json) {
+            wave::Batch batch{};
+            String what;
+            if (!parse_batch(json, batch, what)) {
+                http::reply(r, 400, "text/plain", what);
+                return;
+            }
+            pulse_answer(r, batch);
+        });
+    shape->setMethod(HTTP_POST);
+    server.addHandler(shape);
+
+    server.on("/pulse/stat", HTTP_GET, [this](AsyncWebServerRequest *r) { on_pulse_stat(r); });
     server.on("/pulse", HTTP_POST, [this](AsyncWebServerRequest *r) { on_pulse(r); });
     server.on("/i2c", HTTP_POST, [this](AsyncWebServerRequest *r) { on_i2c(r); });
     server.on("/serial", HTTP_POST, [this](AsyncWebServerRequest *r) { on_serial(r); });
@@ -157,14 +252,102 @@ void BenchRoutes::on_digital_write(AsyncWebServerRequest *request) {
 
 // ---------------------------------------------------------------- импульс
 
-void BenchRoutes::pulse_end(int slot) {
-    pinMode(pulse_[slot].pin, INPUT); // отпускаем линию в high-Z
-    pulse_[slot].busy = false;
+void BenchRoutes::pulse_arm(const int slot, const uint32_t ms) {
+#ifdef ESP8266
+    // не SYS-контекст, а loop()
+    pulse_[slot].timer.once_ms_scheduled(ms, [this, slot]() { pulse_tick(slot); });
+#else
+    // ESP32: таймер ядра зовёт из задачи esp_timer, а не из loop(), поэтому
+    // фронты не ждут ни HTTP-запросов, ни вычитывания UART испытуемого
+    pulse_[slot].timer.once_ms(ms, [this, slot]() { pulse_tick(slot); });
+#endif
+}
+
+void BenchRoutes::pulse_tick(const int slot) {
+    PulseSlot &s = pulse_[slot];
+
+    if (s.index >= s.line.count) {
+        pinMode(s.line.pin, INPUT); // отпускаем линию в high-Z
+        if (s.mark_count <= wave::kMaxEdges) s.marks[s.mark_count++] = millis();
+        s.busy = false;
+        return;
+    }
+
+    if (s.index == 0) pinMode(s.line.pin, OUTPUT);
+    digitalWrite(s.line.pin, wave::level_at(s.line, s.index));
+    if (s.mark_count <= wave::kMaxEdges) s.marks[s.mark_count++] = millis();
+
+    pulse_arm(slot, s.line.edges[s.index]);
+    s.index++;
+}
+
+void BenchRoutes::pulse_start(const wave::Batch &batch) {
+    batch_start_ms_ = millis();
+
+    // Расписка - про последнюю пачку: линии прошлой из неё уходят, даже если
+    // какая-то ещё идёт по другому выводу
+    for (int i = 0; i < kPulseSlots; i++) pulse_[i].in_batch = false;
+
+    for (uint8_t i = 0; i < batch.count; i++) {
+        const int slot = pulse_slot_free();
+        if (slot < 0) return; // свободные слоты сосчитаны до старта
+
+        PulseSlot &s = pulse_[slot];
+        s.line = batch.lines[i];
+        s.index = 0;
+        s.mark_count = 0;
+        s.busy = true;
+        s.in_batch = true;
+
+        // Линия без смещения начинается здесь же, синхронно: так общий старт
+        // пачки один для всех, а не растянут на восемь таймеров
+        if (s.line.at_ms == 0) pulse_tick(slot);
+        else pulse_arm(slot, s.line.at_ms);
+    }
+}
+
+void BenchRoutes::pulse_answer(AsyncWebServerRequest *request, const wave::Batch &batch) {
+    uint32_t total_ms = 0;
+    const wave::Error err = wave::check(batch, total_ms);
+    if (err != wave::Error::None) {
+        http::reply(request, 400, "text/plain", wave::error_text(err));
+        return;
+    }
+
+    // Отказ - про вывод, а не про плату: по соседнему выводу импульс идти
+    // может и должен
+    for (uint8_t i = 0; i < batch.count; i++) {
+        if (pulse_slot_of(batch.lines[i].pin) >= 0) {
+            http::reply(request, 409, "text/plain", "pulse in progress");
+            return;
+        }
+    }
+
+    if (pulse_slots_free() < batch.count) {
+        http::reply(request, 503, "text/plain", "no free pulse timer");
+        return;
+    }
+
+    pulse_start(batch);
+
+    // Отвечаем сразу: пачка принята, идёт, длится столько-то. Ждать её конца
+    // клиент обязан по своим часам - плата про этот момент больше не пишет,
+    // а что она сделала на самом деле, отдаёт GET /pulse/stat.
+    //
+    // Ответ отложенным быть не может. Отложенный уходил chunked-ответом,
+    // который до конца импульса отдавал RESPONSE_TRY_AGAIN, а наполнитель
+    // сервер зовёт заново не в момент готовности, а на следующем опросе
+    // AsyncTCP - раз в ~500 мс. Измерено на плате, импульс 20 мс, 20
+    // замеров: ответ приходил на 240-336 мс позже отпущенной линии. Стенд
+    // отсчитывает от ответа паузу между импульсами, и эта добавка съела
+    // запас проверки слипания: два замыкания через 0,3 с attiny обязан
+    // слить в один импульс, пока не прошло 750 мс, а выходило 636 мс.
+    http::reply(request, 202, "text/plain", String(total_ms));
 }
 
 int BenchRoutes::pulse_slot_of(uint8_t pin) const {
     for (int i = 0; i < kPulseSlots; i++)
-        if (pulse_[i].busy && pulse_[i].pin == pin) return i;
+        if (pulse_[i].busy && pulse_[i].line.pin == pin) return i;
     return -1;
 }
 
@@ -174,7 +357,18 @@ int BenchRoutes::pulse_slot_free() const {
     return -1;
 }
 
+int BenchRoutes::pulse_slots_free() const {
+    int free = 0;
+    for (int i = 0; i < kPulseSlots; i++)
+        if (!pulse_[i].busy) free++;
+    return free;
+}
+
 // POST /pulse  form: pin=<n>&duration_ms=<ms>&value=<0|1>
+//
+// Один уровень на одном выводе - вырожденная пачка из одного участка. Форма
+// оставлена ради того, что в ней и так однозначно: нажатие кнопки, сброс платы,
+// удержание датчика. Всё, где важны интервалы между фронтами, идёт телом JSON.
 void BenchRoutes::on_pulse(AsyncWebServerRequest *request) {
     if (!request->hasParam(PARAM_PIN, true)) {
         send_400(request, Error::NoFormParam, PARAM_PIN);
@@ -189,47 +383,51 @@ void BenchRoutes::on_pulse(AsyncWebServerRequest *request) {
         return;
     }
 
-    const auto pin = static_cast<uint8_t>(form(request, PARAM_PIN).toInt());
-    const auto value = static_cast<uint8_t>(form(request, PARAM_VALUE).toInt());
-    const auto ms = static_cast<uint32_t>(form(request, PARAM_DURATION_MS).toInt());
+    wave::Batch batch{};
+    batch.count = 1;
+    batch.lines[0].pin = static_cast<uint8_t>(form(request, PARAM_PIN).toInt());
+    batch.lines[0].value = static_cast<uint8_t>(form(request, PARAM_VALUE).toInt());
+    batch.lines[0].at_ms = 0;
+    batch.lines[0].count = 1;
+    batch.lines[0].edges[0] = static_cast<uint32_t>(form(request, PARAM_DURATION_MS).toInt());
 
-    // Отказ - про вывод, а не про плату: по соседнему выводу импульс идти
-    // может и должен
-    if (pulse_slot_of(pin) >= 0) {
-        http::reply(request, 409, "text/plain", "pulse in progress");
-        return;
+    pulse_answer(request, batch);
+}
+
+// GET /pulse/stat - что плата сделала в последней пачке, по своим часам
+void BenchRoutes::on_pulse_stat(AsyncWebServerRequest *request) {
+    bool busy = false;
+    for (int i = 0; i < kPulseSlots; i++)
+        if (pulse_[i].in_batch && pulse_[i].busy) busy = true;
+
+    String out = "{\"uptime_ms\":" + String(millis()) + ",\"start_ms\":" +
+                 String(batch_start_ms_) + ",\"busy\":" + (busy ? "true" : "false") +
+                 ",\"lines\":[";
+
+    bool first = true;
+    for (int i = 0; i < kPulseSlots; i++) {
+        const PulseSlot &s = pulse_[i];
+        if (!s.in_batch) continue;
+
+        if (!first) out += ",";
+        first = false;
+
+        out += "{\"pin\":" + String(s.line.pin) + ",\"value\":" + String(s.line.value) +
+               ",\"at_ms\":" + String(s.line.at_ms) + ",\"asked\":[";
+        for (uint8_t e = 0; e < s.line.count; e++) {
+            if (e) out += ",";
+            out += String(s.line.edges[e]);
+        }
+        out += "],\"edges_ms\":[";
+        for (uint8_t m = 0; m < s.mark_count; m++) {
+            if (m) out += ",";
+            out += String(s.marks[m]);
+        }
+        out += "]}";
     }
 
-    const int slot = pulse_slot_free();
-    if (slot < 0) {
-        http::reply(request, 503, "text/plain", "no free pulse timer");
-        return;
-    }
-
-    pulse_[slot].pin = pin;
-    pulse_[slot].busy = true;
-    pinMode(pin, OUTPUT);
-    digitalWrite(pin, value);
-#ifdef ESP8266
-    // не SYS-контекст, а loop()
-    pulse_[slot].timer.once_ms_scheduled(ms, [this, slot]() { pulse_end(slot); });
-#else
-    // ESP32: таймер ядра зовёт из задачи esp_timer
-    pulse_[slot].timer.once_ms(ms, [this, slot]() { pulse_end(slot); });
-#endif
-
-    // Отвечаем сразу: импульс принят, идёт, длится столько-то. Ждать конца
-    // клиент обязан по своим часам - плата про этот момент больше не пишет.
-    //
-    // Ответ отложенным быть не может. Отложенный уходил chunked-ответом,
-    // который до конца импульса отдавал RESPONSE_TRY_AGAIN, а наполнитель
-    // сервер зовёт заново не в момент готовности, а на следующем опросе
-    // AsyncTCP - раз в ~500 мс. Измерено на плате, импульс 20 мс, 20
-    // замеров: ответ приходил на 240-336 мс позже отпущенной линии. Стенд
-    // отсчитывает от ответа паузу между импульсами, и эта добавка съела
-    // запас проверки слипания: два замыкания через 0,3 с attiny обязан
-    // слить в один импульс, пока не прошло 750 мс, а выходило 636 мс.
-    http::reply(request, 202, "text/plain", String(ms));
+    out += "]}";
+    http::reply(request, 200, "application/json", out);
 }
 
 // ---------------------------------------------------------------- I2C

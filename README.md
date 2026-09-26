@@ -60,7 +60,8 @@ Full reference with every parameter and response: [docs/api.md](docs/api.md).
 | [`/pinMode`](docs/api.md#post-pinmode) | POST | set pin mode |
 | [`/digitalRead`](docs/api.md#get-digitalread) | GET | read a pin |
 | [`/digitalWrite`](docs/api.md#post-digitalwrite) | POST | write a pin |
-| [`/pulse`](docs/api.md#post-pulse) | POST | drive a pin for N ms, then release it; answers at once, the client times the wait |
+| [`/pulse`](docs/api.md#post-pulse) | POST | a waveform: pins, levels and segment durations in one JSON body, or one level for N ms as a form; answers at once with the batch length |
+| [`/pulse/stat`](docs/api.md#get-pulsestat) | GET | what the last batch really did: every edge by the board's clock |
 | [`/i2c`](docs/api.md#post-i2c) | POST | I2C: `begin`, `setClock`, `setClockStretchLimit`, `ask`, `flush` |
 | [`/serial`](docs/api.md#post-serial) | POST | DUT UART speed, clear the log |
 | [`/read`](docs/api.md#get-read) | GET | take the recorded serial log; with `ack=<n>` the board keeps the lines until the reader confirms them |
@@ -82,6 +83,11 @@ curl http://$BOARD/version
 
 # Press a button wired to GPIO 5: pull it low for 200 ms, then release
 curl -d pin=5 -d value=0 -d duration_ms=200 http://$BOARD/pulse
+# two closures 800 ms apart, and a 1 ms pulse on a neighbour 100 ms in
+curl -H 'Content-Type: application/json' -d '{"lines":[
+  {"pin": 5, "value": 0, "edges": [300, 800, 300]},
+  {"pin": 6, "value": 0, "at_ms": 100, "edges": [1]}]}' http://$BOARD/pulse
+curl http://$BOARD/pulse/stat
 
 # Read a pin
 curl "http://$BOARD/digitalRead?pin=4"

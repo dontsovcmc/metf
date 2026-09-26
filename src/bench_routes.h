@@ -15,6 +15,7 @@ GPIO и импульсы, I2C, UART испытуемого с кольцом л�
 #include <atomic>
 
 #include "AsyncSerialBuffer.h"
+#include "wave.h"
 #ifdef ESP32
 #include "NtpServer.h"
 #endif
@@ -46,7 +47,8 @@ private:
     несколько - по одному таймеру на каждый. Восемь с запасом: стенду хватает
     четырёх (кнопка, сброс, два входа).
     */
-    static constexpr int kPulseSlots = 8;
+    static_assert(wave::kMaxLines == 8, "слотов ровно столько, сколько линий в пачке");
+    static constexpr int kPulseSlots = wave::kMaxLines;
 
     /*
     Приёмный буфер UART испытуемого.
@@ -62,7 +64,16 @@ private:
     struct PulseSlot {
         Ticker timer;
         volatile bool busy = false;
-        uint8_t pin = 0;
+        wave::Line line{};          // заказанная линия: вывод, уровень, участки
+        uint8_t index = 0;          // участок, который выставит следующий тик
+        /*
+        Фактические моменты фронтов в аптайме платы: участков n, моментов n + 1
+        (последний - отпускание вывода). По ним стенд утверждает, что подал, -
+        заказанному интервалу верить нельзя, его искажает дорога запроса.
+        */
+        uint32_t marks[wave::kMaxEdges + 1] = {};
+        uint8_t mark_count = 0;
+        bool in_batch = false;      // участвовал в последней пачке: для /pulse/stat
     };
 
     /*
@@ -78,14 +89,25 @@ private:
     */
     void watch_overruns();
 
-    void pulse_end(int slot);
+    /*
+    Очередной фронт линии: выставить уровень следующего участка или отпустить
+    вывод, если участки кончились. Зовётся из таймера, поэтому вся работа -
+    регистры GPIO и millis(): ни сети, ни delay.
+    */
+    void pulse_tick(int slot);
+    void pulse_arm(int slot, uint32_t ms);
+    void pulse_start(const wave::Batch &batch);
+    // Проверить пачку, отказать или запустить и ответить распиской
+    void pulse_answer(AsyncWebServerRequest *request, const wave::Batch &batch);
     int pulse_slot_of(uint8_t pin) const;   // слот, занятый этим выводом, или -1
     int pulse_slot_free() const;
+    int pulse_slots_free() const;
 
     void on_pin_mode(AsyncWebServerRequest *request);
     void on_digital_read(AsyncWebServerRequest *request);
     void on_digital_write(AsyncWebServerRequest *request);
     void on_pulse(AsyncWebServerRequest *request);
+    void on_pulse_stat(AsyncWebServerRequest *request);
     void on_i2c(AsyncWebServerRequest *request);
     void on_serial(AsyncWebServerRequest *request);
     void on_read_stat(AsyncWebServerRequest *request);
@@ -101,6 +123,7 @@ private:
     // Считает драйвер в своей задаче, читает обработчик запроса - отсюда atomic
     std::atomic<uint32_t> overruns_{0};
     PulseSlot pulse_[kPulseSlots];
+    uint32_t batch_start_ms_ = 0;   // общий старт последней пачки
 #ifdef ESP32
     NtpServer ntp_;
 #endif

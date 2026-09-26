@@ -55,6 +55,22 @@ class Board:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
             return answer.read().decode()
 
+    def post_json(self, path: str, body: dict[str, Any]) -> tuple[int, str]:
+        """POST телом JSON: (код, тело). Отказ - такая же часть протокола, как успех.
+
+        Форма сигнала уходит только так: в form-data интервалы между фронтами
+        не выразить, а плата разбирает тело по Content-Type.
+        """
+        url = f'http://{self.host}{path}'
+        request = urllib.request.Request(
+            url, data=json.dumps(body).encode(), method='POST',
+            headers={'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
+                return answer.status, answer.read().decode()
+        except urllib.error.HTTPError as err:
+            return err.code, err.read().decode()
+
     def headers(self, path: str) -> dict[str, str]:
         """Заголовки ответа, включая отказ: у 404 они такие же, как у успеха."""
         url = f'http://{self.host}{path}'
