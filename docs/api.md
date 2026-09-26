@@ -1,8 +1,8 @@
 # HTTP API
 
-Protocol version **13** (`GET /version`). The board serves plain HTTP on port 80.
+Protocol version **14** (`GET /version`). The board serves plain HTTP on port 80.
 
-- POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string.
+- POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string. `/pulse` also takes a JSON body - that is how a waveform is ordered.
 - Numbers are decimal: `address=72`, not `0x48`.
 - Commands answer `200 OK` (text/plain) unless noted otherwise. `/pulse` answers `202 Accepted`: the work it starts outlives the answer.
 
@@ -14,8 +14,10 @@ Errors:
 | 400 | `parameter '<name>' not found` | a required GET parameter is missing |
 | 400 | `parameter '<name>' is incorrect` | the value or `action` is not accepted |
 | 404 | `Not found` | unknown URL or wrong method |
+| 400 | `no lines array`, `line without pin`, `line without edges`, `edge is not a number of ms`, `value is not a number`, `at_ms is not a number` | a JSON `/pulse` body the board cannot read |
+| 400 | `no lines`, `too many lines`, `too many edges`, `edge shorter than 1 ms`, `batch longer than 30 s`, `pin twice in one batch` | a waveform outside the limits |
 | 409 | `pulse in progress` | `/pulse` on a pin whose own pulse is still running |
-| 503 | `no free pulse timer` | `/pulse` with all 8 pulse slots busy |
+| 503 | `no free pulse timer` | `/pulse` with fewer free pulse slots than the batch needs |
 | 409 | `previous command in progress` | `POST /wifi action=set` while the last one is not applied yet |
 | 500 | a description | hardware failure: I2C error, UDP port busy, RGB not initialised |
 
@@ -29,7 +31,7 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer, 12 gave `/read` the `ack` parameter and the `X-Log-Seq` header, so the board keeps lines until the reader confirms them, 13 added `overruns` to `GET /read/stat` - the times the UART driver buffer overflowed, a hole the ring counter cannot see.
+Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer, 12 gave `/read` the `ack` parameter and the `X-Log-Seq` header, so the board keeps lines until the reader confirms them, 13 added `overruns` to `GET /read/stat` - the times the UART driver buffer overflowed, a hole the ring counter cannot see, 14 gave `/pulse` a JSON body describing a whole waveform and added `GET /pulse/stat` with the edges the board really produced.
 
 ### X-Uptime-Ms
 
@@ -135,7 +137,29 @@ Does not change the pin mode; set it with `/pinMode` first.
 
 ### POST /pulse
 
-Drives a pin for a fixed time and releases it - a button press with the timing done on the ESP.
+Drives pins for fixed times and releases them - impulses into a counter input, a button press, a leak sensor held closed.
+
+**A waveform, JSON body.** This is the form to use whenever the intervals *between* edges matter:
+
+```
+curl -H 'Content-Type: application/json' -d '{"lines":[
+  {"pin": 2, "value": 0, "edges": [300, 800, 300]},
+  {"pin": 3, "value": 0, "at_ms": 100, "edges": [1]}
+]}' http://<board>/pulse
+```
+
+| Field | Meaning |
+|---|---|
+| `lines[].pin` | GPIO number. Required, and no pin twice in one batch |
+| `lines[].value` | level of the **first** segment, `1` or `0`; the levels alternate from there. Default `0` |
+| `lines[].edges` | segment durations in ms, in order. Required, at least one |
+| `lines[].at_ms` | start of this line, ms after the batch start. Default `0` |
+
+The example reads: pin 2 is pulled low for 300 ms, released for 800 ms, pulled low for 300 ms; and 100 ms after that batch started, pin 3 gets a 1 ms pulse of its own. Two closures 800 ms apart are two impulses for a Waterius counter - its attiny ends an impulse after three empty polls, 750 ms. Shorten that middle segment and the same two closures must merge into one; that is the merge rule a bench has to be able to order.
+
+Limits: at most 8 lines (one pulse slot each), at most 16 segments per line, at most 30 s for the whole batch, at least 1 ms per segment. Anything longer is a train, and a train belongs to the client - it has to drain `/read` during the gaps anyway.
+
+**One level, form body.** The older, degenerate form - one segment on one pin - still works, and the bench still uses it where nothing is being timed between edges: a button press, a board reset, a sensor held closed.
 
 | Field | Meaning |
 |---|---|
@@ -143,13 +167,35 @@ Drives a pin for a fixed time and releases it - a button press with the timing d
 | `value` | level to drive, `1` or `0` |
 | `duration_ms` | how long to hold it, ms |
 
-The board sets the pin to `OUTPUT`, writes `value`, arms a timer for `duration_ms` and answers **immediately**: `202 Accepted`, body `duration_ms`. When the timer fires, the pin goes back to `INPUT` (high-Z). Nothing is sent at that moment - **the client waits out the pulse on its own clock**, and the board stays responsive throughout: `/read`, `/ping` and everything else keep answering.
+Either way the board sets the pins to `OUTPUT`, writes the first level, arms a timer per line and answers **immediately**: `202 Accepted`, body the length of the whole batch in ms. Each line's pin goes back to `INPUT` (high-Z) when its last segment ends. Nothing is sent at that moment - **the client waits out the batch on its own clock**, and the board stays responsive throughout: `/read`, `/ping` and everything else keep answering.
 
-The answer is a receipt, not a finish line. Protocol 7 made it the finish line - the answer was held back until the timer fired - and that turned out to be a bad clock: a deferred answer is not sent when it is ready but on the connection's next poll, and AsyncTCP polls about twice a second. Measured on the board, 20 ms pulse, 20 samples: the answer arrived 240-336 ms after the line was already released. A bench that spaces impulses from the moment the call returns silently got a quarter-second added to every gap. Protocol 8 hands the clock back to the client, where it is exact.
+The answer is a receipt, not a finish line. Protocol 7 made it the finish line - the answer was held back until the timer fired - and that turned out to be a bad clock: a deferred answer is not sent when it is ready but on the connection's next poll, and AsyncTCP polls about twice a second. Measured on the board, 20 ms pulse, 20 samples: the answer arrived 240-336 ms after the line was already released. A bench that spaces impulses from the moment the call returns silently got a quarter-second added to every gap. Protocol 8 handed the clock back to the client - and protocol 14 took the intervals themselves away from it, because a client's clock is only as good as the radio between it and the pin: a gap ordered as 0.3 s arrived as 2 s on a weak link, and the bench blamed the device under test for counting two impulses.
 
-Two pulses cannot overlap **on the same pin**: a second `/pulse` for a pin whose pulse is still running is refused with `409 pulse in progress`. That refusal is also how a client can ask whether a line is still busy without touching it.
+Two pulses cannot overlap **on the same pin**: a `/pulse` naming a pin whose pulse is still running is refused with `409 pulse in progress`, and nothing in the batch starts. That refusal is also how a client can ask whether a line is still busy without touching it.
 
-Different pins run at the same time - the board keeps 8 pulse slots, one timer each - because that is what a bench does: press the button while a train of impulses runs into the counter input. Protocol 7 had a single flag for the whole board and refused such a press; with all 8 slots busy the answer is `503 no free pulse timer`.
+Different pins run at the same time - the board keeps 8 pulse slots, one timer each - because that is what a bench does: press the button while a train of impulses runs into the counter input. Protocol 7 had a single flag for the whole board and refused such a press; with fewer free slots than the batch needs the answer is `503 no free pulse timer`.
+
+On ESP32 the timers fire from the `esp_timer` task, not from `loop()`, so the edges do not wait for HTTP requests or for the UART log being drained.
+
+### GET /pulse/stat
+
+What the board actually did in the **last** batch, by its own clock:
+
+```json
+{"uptime_ms": 12345678, "start_ms": 12345600, "busy": false,
+ "lines": [{"pin": 2, "value": 0, "at_ms": 0, "asked": [300, 800, 300],
+            "edges_ms": [12345600, 12345901, 12346702, 12347003]}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `uptime_ms` | board clock now, same source as `X-Uptime-Ms` |
+| `start_ms` | when the batch started |
+| `busy` | some line of that batch is still running |
+| `lines[].asked` | the segment durations that were ordered |
+| `lines[].edges_ms` | when each level change really happened; one more than there are segments - the last one is the release |
+
+This is the only honest source about the stimulus. A test states what it delivered from these numbers, never from what it ordered: the order travels over Wi-Fi, the numbers do not. If the board could not keep the timing - a callback delayed under radio load - the difference is visible here, and the test's verdict is then about the bench, not about the device under test.
 
 ## I2C
 
