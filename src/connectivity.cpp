@@ -14,6 +14,7 @@ using Pattern = Blinker::Pattern;
 
 // Шаг сетевой части
 constexpr uint32_t kTickMs = 10;
+constexpr uint16_t kHttpPort = 80;
 using State = WifiPolicy::State;
 
 namespace {
@@ -37,6 +38,12 @@ std::unique_ptr<LedDriver> make_led(uint8_t brightness) {
 #endif
 }
 
+String lower(const char *text) {
+    String out(text);
+    out.toLowerCase();
+    return out;
+}
+
 // "RRGGBB" -> цвет; false - не шесть шестнадцатеричных цифр
 bool parse_hex_color(const String &hex, Rgb &out) {
     uint8_t v[3] = {};
@@ -57,6 +64,9 @@ void Connectivity::begin(AsyncWebServer &server) {
     blinker_.loop(millis()); // синий - сразу, а не на первом шаге loop() // синий - сразу, а не на первом loop()
 
     link_.begin();
+    // После link_.begin(): имя своей точки собрано из MAC там
+    mdns_.begin(lower(cfg_.wifi.ap_prefix).c_str(), link_.ap_ssid(), kHttpPort,
+                METF_VERSION);
     portal_.attach(server); // вместе с onNotFound: редирект на страницу настройки
     attach_rgb(server);
 }
@@ -72,6 +82,7 @@ void Connectivity::loop() {
     tick_at_ = now;
 
     link_.loop();
+    mdns_.loop(link_.state() == State::Online);
     portal_.loop();
     show_status();
     blinker_.loop(now);

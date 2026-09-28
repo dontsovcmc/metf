@@ -25,6 +25,7 @@ WifiLink здесь переводится в цвет и ритм Blinker, зд
 #include "blinker.h"
 #include "timing.h"
 #include "led_driver.h"
+#include "mdns_service.h"
 #include "wifi_link.h"
 #include "wifi_portal.h"
 
@@ -55,6 +56,7 @@ private:
 
     Config cfg_;
     WifiLink link_;
+    MdnsService mdns_;
     WifiPortal portal_;
     std::unique_ptr<LedDriver> led_; // под плату; без светодиода - пустышка
     Blinker blinker_;                // объявлен после led_: держит ссылку на него

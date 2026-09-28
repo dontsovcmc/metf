@@ -1,6 +1,6 @@
 # HTTP API
 
-Protocol version **14** (`GET /version`). The board serves plain HTTP on port 80.
+Protocol version **15** (`GET /version`). The board serves plain HTTP on port 80, and answers to the name `metf.local` (see [mDNS](#mdns)).
 
 - POST parameters are form fields in the body (`application/x-www-form-urlencoded`, `curl -d name=value`); GET parameters go in the query string. `/pulse` also takes a JSON body - that is how a waveform is ordered.
 - Numbers are decimal: `address=72`, not `0x48`.
@@ -31,7 +31,7 @@ Answers `pong`.
 
 ### GET /version
 
-Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer, 12 gave `/read` the `ack` parameter and the `X-Log-Seq` header, so the board keeps lines until the reader confirms them, 13 added `overruns` to `GET /read/stat` - the times the UART driver buffer overflowed, a hole the ring counter cannot see, 14 gave `/pulse` a JSON body describing a whole waveform and added `GET /pulse/stat` with the edges the board really produced.
+Answers the protocol version, e.g. `11`. It changes when the API changes: 5 added `/read/stat`, 6 added `/ntp`, 7 made `/pulse` non-blocking and gave it `409`, 8 made `/pulse` answer at once with `202` instead of at the end of the pulse, 9 added `/wifi` and the setup page at `/`, and gave `/rgb` the `status` action, 10 added `problem` to `GET /wifi` - the disconnect reason in words, 11 put the `X-Uptime-Ms` header on every answer, 12 gave `/read` the `ack` parameter and the `X-Log-Seq` header, so the board keeps lines until the reader confirms them, 13 added `overruns` to `GET /read/stat` - the times the UART driver buffer overflowed, a hole the ring counter cannot see, 14 gave `/pulse` a JSON body describing a whole waveform and added `GET /pulse/stat` with the edges the board really produced, and 15 announces the board over mDNS, so a client can reach it by name after DHCP has moved it.
 
 ### X-Uptime-Ms
 
@@ -51,6 +51,14 @@ restart.
 ## Network
 
 The board keeps its own network settings and can be moved to another router without reflashing: see [wifi.md](wifi.md) for the algorithm, the timings and the setup page.
+
+### mDNS
+
+The board announces itself as `metf.local` and as an `_http._tcp` service whose instance name is its own access point name (`METF-XXXX`), with the protocol version in a TXT record. The announcement goes up when the board gets an address and comes down when the network is lost, so the name never points at an address the board no longer holds.
+
+The name exists because the address does not survive: DHCP hands out a new one when a lease expires or a router reboots, and a client that stores the address in a config file simply stops getting answers - by timeout, with nothing to read. Resolving the name needs no library: `ping metf.local`, `curl http://metf.local/version`, `socket.gethostbyname('metf.local')`.
+
+Two boards on one network claim the same name; mDNS resolves that by renaming the second one (`metf-2.local`). The service instance name stays unique either way, because it carries the board's own suffix.
 
 ### GET /wifi
 
