@@ -17,12 +17,16 @@ Supported boards: ESP32-C6 SuperMini (default build) and NodeMCU (ESP8266).
 cp secrets.ini.template secrets.ini          # WiFi the board will join
 pio run -e esp32-c6-super-mini -t upload --upload-port /dev/cu.usbmodemXXXX
 pio device monitor --port /dev/cu.usbmodemXXXX   # the board prints its IP at boot
-curl http://<ip>/version
+curl http://metf.local/version                   # by name: DHCP may move the address
 ```
 
 The network from `secrets.ini` is the default one. If the board cannot reach it, it raises its own open access point named `METF-XXXX` about 25 seconds after power-up: connect a phone to it, the setup page opens by itself, pick a network and the board saves it. A saved network overrides the compiled one until `POST /wifi action=forget`. Holding the BOOT button for 3 seconds raises the access point on demand.
 
 Details: [docs/build.md](docs/build.md) for building and credentials, [docs/wifi.md](docs/wifi.md) for the network algorithm, its timings and what happens when the network disappears. The access point and the setup page are walked by a stand of their own - a second board plays the phone: [Utils/hil/README.md](Utils/hil/README.md).
+
+## Finding the board
+
+The board announces itself over mDNS as `metf.local`, so nothing has to remember its address: DHCP gives out a new one when a lease expires or the router reboots, and a client holding the old address just stops getting answers. The announcement carries the protocol version and goes down with the network, so the name never points at a stale address. Details: [docs/api.md](docs/api.md#mdns).
 
 ## Web server and captive portal
 
@@ -69,6 +73,7 @@ Full reference with every parameter and response: [docs/api.md](docs/api.md).
 | [`/ntp`](docs/api.md#post-ntp) | POST | NTP server: `start`, `time`, `stop`, `drop` (ESP32) |
 | [`/ntp/stat`](docs/api.md#get-ntpstat) | GET | NTP server state and counters (ESP32) |
 | [`/rgb`](docs/api.md#post-rgb) | POST | onboard LED: `begin`, `brightness`, `color`, `status` |
+| [`metf.local`](docs/api.md#mdns) | — | the board answers to this name over mDNS, whatever address DHCP gave it |
 | [`/wifi`](docs/api.md#get-wifi) | GET | network state: mode, address, signal, outage |
 | [`/wifi`](docs/api.md#post-wifi) | POST | network: `set`, `forget`, `ap`, `scan` |
 | [`/`](docs/api.md#get-) | GET | setup page: pick a network and enter its password |

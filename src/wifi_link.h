@@ -98,6 +98,7 @@ public:
 
     // Дёшево и без радио - для тех, кому это нужно каждый проход loop()
     bool ap_up() const { return ap_up_.load(); }
+    const char *ap_ssid() const { return ap_ssid_; }
     IPAddress ap_ip() const { return ap_ip_; }
 
     // --- команды, можно из обработчика HTTP
